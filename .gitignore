@@ -1,0 +1,5 @@
+.stack-work/
+simpl-lang.cabal
+/*.o
+/sample
+*~

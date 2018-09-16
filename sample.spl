@@ -1,0 +1,3 @@
+fun main : Double := {
+  (if false then 5.0 else 10.0) + 2
+}

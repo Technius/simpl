@@ -1,0 +1,72 @@
+name:                simpl-lang
+version:             0.1.0.0
+github:              "Technius/simpl-lang"
+license:             Apache 2.0
+author:              "Bryan Tan"
+maintainer:          "Bryan Tan"
+copyright:           "Bryan Tan (Technius) 2018"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/Technius/simpl-lang#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- text
+- megaparsec >= 6.5.0 && < 7
+- parser-combinators
+- recursion-schemes
+- deriving-compat
+- llvm-hs-pure >= 6.0.3 && < 7
+- llvm-hs >= 6.0.3 && < 7
+- prettyprinter
+- unification-fd
+- mtl
+
+library:
+  source-dirs: src
+
+executables:
+  simplc:
+    source-dirs: app
+    main: SimplCompiler
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -Wall
+    - -Wcompat
+    - -Wincomplete-record-updates
+    - -Wincomplete-uni-patterns
+    - -Wredundant-constraints
+    dependencies:
+    - simpl-lang
+  simpl-repl:
+    source-dirs: app
+    main: SimplRepl
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - simpl-lang
+
+tests:
+  simpl-lang-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - simpl-lang
