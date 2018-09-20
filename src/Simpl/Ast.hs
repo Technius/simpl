@@ -17,12 +17,13 @@ import Data.Eq.Deriving (deriveEq1)
 -- * AST Type
 
 data ExprF a
-  = Lit !Literal
-  | Add !a !a
-  | Sub !a !a
-  | Mul !a !a
-  | Div !a !a
-  | If !a !a !a
+  = Lit !Literal -- ^ Literal value
+  | Add !a !a -- ^ Add (doubles)
+  | Sub !a !a -- ^ Subtract (doubles)
+  | Mul !a !a -- ^ Multiply (doubles)
+  | Div !a !a -- ^ Divide (doubles)
+  | If !a !a !a -- ^ If expression
+  | Cons !Text ![a] -- ^ Construct ADT
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -61,6 +62,9 @@ div a b = Fix (Div a b)
 ifExpr :: Expr -> Expr -> Expr -> Expr
 ifExpr cond t1 t2 = Fix (If cond t1 t2)
 
+cons :: Text -> [Expr] -> Expr
+cons name args = Fix (Cons name args)
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitBool b) = pretty b
@@ -80,6 +84,8 @@ instance Pretty Expr where
       go (Div p1 p2) = binop "/" p1 p2
       go (If cond (_, t1) (_, t2)) =
         hsep ["if", wrapComplex cond, "then", t1, "else", t2]
+      go (Cons name args) =
+        pretty name <+> hsep (wrapComplex <$> args)
 
 $(deriveShow1 ''ExprF)
 
@@ -98,6 +104,7 @@ cataM f = (>>= f) . mapM (cataM f) . project
 data TypeF a
   = TyDouble
   | TyBool
+  | TyAdt Text
   deriving (Show, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
@@ -108,13 +115,18 @@ $(deriveEq1 ''TypeF)
 instance Unifiable TypeF where
   zipMatch TyDouble TyDouble = Just TyDouble
   zipMatch TyBool TyBool = Just TyBool
+  zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
   zipMatch _ _ = Nothing
 
 -- * Source File Types
 
 data Decl e
   = DeclFun Text Type e -- ^ A function declaration, in order of name, type, expression
+  | DeclAdt Text [Constructor] -- ^ An algebraic data type declaration
   deriving (Show, Functor)
+
+data Constructor = Ctor Text [Type]
+  deriving (Show)
 
 data SourceFile e = SourceFile Text [Decl e]
   deriving (Show, Functor)

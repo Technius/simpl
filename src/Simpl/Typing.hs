@@ -1,12 +1,15 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 module Simpl.Typing where
 
-import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT)
+import Control.Monad (when)
+import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
+import Data.Foldable (traverse_)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix)
 
@@ -18,6 +21,7 @@ type UType = UTerm TypeF UVar
 data TypeError
   = TyErrOccurs UVar UType
   | TyErrMismatch (TypeF UType) (TypeF UType) -- ^ Expected, actual
+  | TyErrArgCount Int Int [TypeF UType] -- ^ Expected count, actual count, expected arg types
   deriving (Show)
 
 instance Fallible TypeF UVar TypeError where
@@ -60,6 +64,15 @@ checkType expr ty = case unfix expr of
       resTy <- inferType t1
       _ <- checkType t2 resTy
       unifyTy resTy ty
+    Cons name args -> do
+      argTys <- traverse inferType args
+      let conArgs = []
+      when (length conArgs /= length argTys) $
+        throwError $ TyErrArgCount (length conArgs) (length argTys) conArgs
+      traverse_ (uncurry unifyTy) (zip conArgs argTys)
+      -- TODO: Loop up constructor type in symbol table
+      let adtTy = UTerm (TyAdt "unimplemented")
+      unifyTy adtTy ty
   where
     doubleBinop x y = do
       ty1 <- checkType x (UTerm TyDouble)

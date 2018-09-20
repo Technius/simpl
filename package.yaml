@@ -1,7 +1,7 @@
 name:                simpl-lang
 version:             0.1.0.0
 github:              "Technius/simpl-lang"
-license:             Apache 2.0
+license:             Apache-2.0
 author:              "Bryan Tan"
 maintainer:          "Bryan Tan"
 copyright:           "Bryan Tan (Technius) 2018"

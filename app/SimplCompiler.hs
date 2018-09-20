@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module SimplCompiler where
 
 import Control.Exception
@@ -25,8 +26,7 @@ main = do
 
 codegen :: SourceFile Expr -> IO ()
 codegen (SourceFile _ decls) =
-  case find (\(DeclFun n _ _) -> n == "main") decls of
-    Nothing -> putStrLn "No main function found" >> pure ()
+  case find isMain decls of
     Just (DeclFun _ _ mainBody) -> do
       let llvmMod = generateLLVM mainBody
       handleErrors $ withHostTargetMachine $ \target ->
@@ -34,6 +34,11 @@ codegen (SourceFile _ decls) =
           withModuleFromAST ctx llvmMod $ \mod' -> do
             verify mod'
             writeObjectToFile target (File "sample.o") mod'
+    _ -> putStrLn "No main function found" >> pure ()
+  where
+    isMain = \case
+      DeclFun n _ _ -> n == "main"
+      _ -> False
 
 readSourceFile :: String -> IO (Maybe (SourceFile Expr))
 readSourceFile filepath = do

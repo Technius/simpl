@@ -80,18 +80,31 @@ ifExpr = lexeme $ do
   t2 <- expr
   pure $ Ast.ifExpr cond t1 t2
 
+-- | ADT constructor
+adtCons :: Parser m Expr
+adtCons = lexeme $ do
+  name <- typeIdentifier
+  args <- many (lexeme (parens expr) <|> atom)
+  pure $ Ast.cons name args
+
 expr :: Parser m Expr
-expr = try ifExpr <|> arith
+expr = try ifExpr <|> try adtCons <|> arith
 
 typeLit :: Parser m Type
 typeLit = Fix <$> ((symbol "Double" >> pure Ast.TyDouble)
           <|> (symbol "Bool" >> pure Ast.TyBool))
 
+typeIdentifier :: Parser m Text
+typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumChar))
+
+typeAdt :: Parser m Type
+typeAdt = Fix . Ast.TyAdt <$> typeIdentifier
+
 type' :: Parser m Type
-type' = typeLit
+type' = typeLit <|> typeAdt
 
 declFun :: Parser m (Decl Expr)
-declFun = do
+declFun = lexeme $ do
   _ <- keyword "fun"
   name <- identifier
   _ <- symbol ":"
@@ -100,8 +113,22 @@ declFun = do
   body <- between (symbol "{") (symbol "}") expr
   pure $ Ast.DeclFun name ty body
 
+constructor :: Parser m Ast.Constructor
+constructor = lexeme $ do
+  name <- typeIdentifier
+  args <- many type'
+  pure $ Ast.Ctor name args
+
+declAdt :: Parser m (Decl Expr)
+declAdt = do
+  _ <- keyword "data"
+  name <- typeIdentifier
+  _ <- symbol "="
+  ctors <- constructor `sepBy1` symbol "|"
+  pure $ Ast.DeclAdt name ctors
+
 decl :: Parser m (Decl Expr)
-decl = declFun
+decl = declFun <|> declAdt
 
 sourceFile :: Text -> Parser m (SourceFile Expr)
 sourceFile name = (Ast.SourceFile name <$> many decl) <* eof
