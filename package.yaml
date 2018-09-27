@@ -39,7 +39,7 @@ library:
 executables:
   simplc:
     source-dirs: app
-    main: SimplCompiler
+    main: Simplc
     ghc-options:
     - -threaded
     - -rtsopts

@@ -1,11 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module SimplCompiler where
+module Simplc where
 
 import Control.Exception
 import Control.Monad (forM_)
 import Data.List (find)
+import Simpl.Analysis
 import Simpl.Ast
 import Simpl.Codegen
 import qualified Simpl.Parser as Parser
@@ -25,10 +26,11 @@ main = do
     Nothing -> pure ()
 
 codegen :: SourceFile Expr -> IO ()
-codegen (SourceFile _ decls) =
+codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
     Just (DeclFun _ _ mainBody) -> do
       let llvmMod = generateLLVM mainBody
+          symbolTable = buildSymbolTable srcFile
       handleErrors $ withHostTargetMachine $ \target ->
         withContext $ \ctx ->
           withModuleFromAST ctx llvmMod $ \mod' -> do
