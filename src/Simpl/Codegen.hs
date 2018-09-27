@@ -3,10 +3,11 @@
 {-# LANGUAGE LambdaCase #-}
 module Simpl.Codegen where
 
-import Control.Monad (liftM2)
-import Data.Functor.Foldable (cata)
+import Control.Monad (liftM2, forM_)
+import Data.Functor.Foldable (cata, unfix)
 import Data.Text.Prettyprint.Doc (pretty)
 import Data.Char (ord)
+import qualified Data.Text as Text
 import qualified LLVM.AST as LLVM
 import qualified LLVM.AST.Linkage as LLVM
 import qualified LLVM.AST.Constant as LLVMC
@@ -89,6 +90,38 @@ arithToLLVM = cata $ \case
     LLVMIR.br endLabel
     LLVMIR.emitBlockStart endLabel
     LLVMIR.phi [(t1Res, trueLabel), (t2Res, falseLabel)]
+  Cons _ _ ->
+    -- TODO: Look up types in symbol table to determine how to codegen
+    --       and to allocate memory (will need LLVM.Internal.FFI.getTypeAllocSize)
+    LLVMIR.double (-1.0)
+
+typeToLLVM :: Type -> LLVM.Type
+typeToLLVM = go . unfix
+  where
+    go = \case
+      TyDouble -> LLVM.float
+      TyBool -> LLVM.i1
+      TyAdt _ -> LLVM.i1 -- TODO: Look up in symbol table, or insert if not found
+
+declToLLVM :: LLVMIR.MonadModuleBuilder m => Decl Expr -> m ()
+declToLLVM d = case d of
+  DeclFun name ty body ->
+    let name' = if name == "main" then "__simpl_main" else name
+        llvmName = LLVM.mkName (Text.unpack name')
+        defn = LLVMIR.function llvmName [] (typeToLLVM ty) $ \_args -> do
+          retval <- arithToLLVM body
+          LLVMIR.ret retval
+    in defn >> pure ()
+  DeclAdt adtName ctors -> do
+    let adtType = LLVM.StructureType
+          { LLVM.isPacked = True
+          , LLVM.elementTypes = [LLVM.i32, LLVM.ptr LLVM.i8] }
+    LLVMIR.typedef (LLVM.mkName (Text.unpack adtName)) (Just adtType)
+    forM_ ctors $ \(Ctor ctorName args) -> do
+      let ctorType = LLVM.StructureType
+            { LLVM.isPacked = True
+            , LLVM.elementTypes = typeToLLVM <$> args }
+      LLVMIR.typedef (LLVM.mkName (Text.unpack ctorName)) (Just ctorType)
 
 generateLLVM :: Expr -> LLVM.Module
 generateLLVM expr = LLVMIR.buildModule "simpl.ll" $ do
