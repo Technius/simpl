@@ -3,3 +3,7 @@ data Foo = Bar Double
 fun main : Double := {
   (if false then 5.0 else 10.0) + 2
 }
+
+fun foo : Foo := {
+  Bar 5.0
+}

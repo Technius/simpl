@@ -3,9 +3,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Simpl.Compiler where
 
-import Control.Monad.State
-
 import Control.Monad.Except
+import Control.Monad.Reader
+import Control.Monad.State
 import qualified LLVM.AST as LLVM
 
 import Simpl.Analysis
@@ -38,11 +38,11 @@ runCompiler symTab
 fullCompilerPipeline :: SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
 fullCompilerPipeline srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
-    symTable <- get
     forM_ decls $ \case
       DeclFun _fname ty expr -> do
+        symTable <- get
         _ <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable (checkType expr (typeToUtype ty)))
         pure ()
       _ -> pure ()
-    pure $ generateLLVM decls
+    gets (runReader (generateLLVM decls))

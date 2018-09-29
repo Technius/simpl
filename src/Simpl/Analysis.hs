@@ -36,8 +36,10 @@ symTabModifyAdts f t = t { symTabAdts = f (symTabAdts t) }
 symTabMapFuns :: (e -> e') -> SymbolTable e -> SymbolTable e'
 symTabMapFuns f t = t { symTabFuns = Map.map (second f) (symTabFuns t) }
 
-symTabLookupCtor :: Text -> SymbolTable e -> Maybe (Type, Constructor)
+-- | Searches for the given constructor, returning the name of the ADT, the
+-- constructor, and the index of the constructor.
+symTabLookupCtor :: Text -> SymbolTable e -> Maybe (Type, Constructor, Int)
 symTabLookupCtor name t = listToMaybe . mapMaybe (find isTheCtor) $ getCtors
   where
-    getCtors = (\(ty, cs) -> repeat ty `zip` cs) <$> Map.elems (symTabAdts t)
-    isTheCtor (_, Ctor ctorName _) = ctorName == name
+    getCtors = (\(ty, cs) -> zip3 (repeat ty) cs [0..]) <$> Map.elems (symTabAdts t)
+    isTheCtor (_, Ctor ctorName _, _) = ctorName == name

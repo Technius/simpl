@@ -74,7 +74,7 @@ checkType expr ty = case unfix expr of
       argTys <- traverse inferType args
       ctorRes <- asks (symTabLookupCtor name)
       case ctorRes of
-        Just (adtTy, Ctor _ ctorArgTys) -> do
+        Just (adtTy, Ctor _ ctorArgTys, _) -> do
           let conArgs = typeToUtype <$> ctorArgTys
           when (length conArgs /= length argTys) $
             throwError $ TyErrArgCount (length conArgs) (length argTys) ctorArgTys
