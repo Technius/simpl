@@ -1,17 +1,17 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Simpl.Compiler where
 
 import Control.Monad.State
 
 import Control.Monad.Except
-import Data.Functor.Identity
 import qualified LLVM.AST as LLVM
 
 import Simpl.Analysis
 import Simpl.Ast
 import Simpl.Codegen (generateLLVM)
-import Simpl.Typing (TypeError, runTypecheck, inferType)
+import Simpl.Typing (TypeError, runTypecheck, checkType, typeToUtype)
 
 -- | Main error type, aggregating all error types.
 data CompilerErr
@@ -21,23 +21,28 @@ data CompilerErr
 
 -- | Monad for handling compiler
 newtype CompilerMonad e a = MkCompilerMonad
-  { unCompiler :: StateT (SymbolTable e) (ExceptT CompilerErr Identity) a }
+  { unCompiler :: StateT (SymbolTable e) (ExceptT CompilerErr IO) a }
   deriving ( Functor
            , Applicative
            , Monad
            , MonadState (SymbolTable e)
-           , MonadError CompilerErr)
+           , MonadError CompilerErr
+           , MonadIO)
 
-runCompiler :: SymbolTable e -> CompilerMonad e a -> Either CompilerErr a
+runCompiler :: SymbolTable e -> CompilerMonad e a -> IO (Either CompilerErr a)
 runCompiler symTab
-  = runIdentity
-  . runExceptT
+  = runExceptT
   . flip evalStateT symTab
   . unCompiler
 
-fullCompilerPipeline :: Expr -> CompilerMonad Expr LLVM.Module
-fullCompilerPipeline program = do
-  symTable <- get
-  _ty <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
-    liftEither (runTypecheck symTable (inferType program))
-  pure $ generateLLVM program
+fullCompilerPipeline :: SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
+fullCompilerPipeline srcFile@(SourceFile _name decls) =
+  runCompiler (buildSymbolTable srcFile) $ do
+    symTable <- get
+    forM_ decls $ \case
+      DeclFun _fname ty expr -> do
+        _ <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
+          liftEither (runTypecheck symTable (checkType expr (typeToUtype ty)))
+        pure ()
+      _ -> pure ()
+    pure $ generateLLVM decls

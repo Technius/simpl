@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE LambdaCase #-}
 module Simpl.Ast where
 
 import Control.Unification (Unifiable, zipMatch)
@@ -118,15 +119,33 @@ instance Unifiable TypeF where
   zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
   zipMatch _ _ = Nothing
 
+instance Pretty Type where
+  pretty = para go
+    where
+      go :: TypeF (Type, Doc ann) -> Doc ann
+      go TyDouble = "Double"
+      go TyBool = "Bool"
+      go (TyAdt n) = pretty n
+
 -- * Source File Types
+
+data Constructor = Ctor Text [Type]
+  deriving (Show)
+
+instance Pretty Constructor where
+  pretty (Ctor name args) = hsep (pretty name : (pretty <$> args))
 
 data Decl e
   = DeclFun Text Type e -- ^ A function declaration, in order of name, type, expression
   | DeclAdt Text [Constructor] -- ^ An algebraic data type declaration
   deriving (Show, Functor)
 
-data Constructor = Ctor Text [Type]
-  deriving (Show)
+instance Pretty e => Pretty (Decl e) where
+  pretty = \case
+    DeclFun name ty expr ->
+      hsep ["fun", pretty name, ":", pretty ty, "="] <> softline <> pretty expr
+    DeclAdt name ctors ->
+      hsep ["data", pretty name] <+> encloseSep "=" emptyDoc " | " (pretty <$> ctors)
 
 data SourceFile e = SourceFile Text [Decl e]
   deriving (Show, Functor)

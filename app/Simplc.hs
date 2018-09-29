@@ -6,9 +6,8 @@ module Simplc where
 import Control.Exception
 import Control.Monad (forM_)
 import Data.List (find)
-import Simpl.Analysis
 import Simpl.Ast
-import Simpl.Codegen
+import Simpl.Compiler
 import qualified Simpl.Parser as Parser
 import LLVM.Target (withHostTargetMachine)
 import LLVM.Module (File(File), withModuleFromAST, writeObjectToFile)
@@ -28,14 +27,11 @@ main = do
 codegen :: SourceFile Expr -> IO ()
 codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
-    Just (DeclFun _ _ mainBody) -> do
-      let llvmMod = generateLLVM mainBody
-          symbolTable = buildSymbolTable srcFile
-      handleErrors $ withHostTargetMachine $ \target ->
-        withContext $ \ctx ->
-          withModuleFromAST ctx llvmMod $ \mod' -> do
-            verify mod'
-            writeObjectToFile target (File "sample.o") mod'
+    Just _ -> do
+      modRes <- fullCompilerPipeline srcFile
+      case modRes of
+        Left err -> putStrLn $ "Error: " ++ show err
+        Right llvmMod -> outputModule llvmMod
     _ -> putStrLn "No main function found" >> pure ()
   where
     isMain = \case
@@ -56,3 +52,10 @@ handleErrors :: IO () -> IO ()
 handleErrors action = catch action $ \(e :: SomeException) -> do
   putStrLn "An error occured: "
   forM_ (lines (displayException e)) putStrLn
+
+outputModule llvmMod =
+  withHostTargetMachine $ \target ->
+    withContext $ \ctx ->
+      withModuleFromAST ctx llvmMod $ \mod' -> do
+        verify mod'
+        writeObjectToFile target (File "sample.o") mod'

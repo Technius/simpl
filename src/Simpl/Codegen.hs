@@ -99,7 +99,7 @@ typeToLLVM :: Type -> LLVM.Type
 typeToLLVM = go . unfix
   where
     go = \case
-      TyDouble -> LLVM.float
+      TyDouble -> LLVM.double
       TyBool -> LLVM.i1
       TyAdt _ -> LLVM.i1 -- TODO: Look up in symbol table, or insert if not found
 
@@ -123,17 +123,22 @@ declToLLVM d = case d of
             , LLVM.elementTypes = typeToLLVM <$> args }
       LLVMIR.typedef (LLVM.mkName (Text.unpack ctorName)) (Just ctorType)
 
-generateLLVM :: Expr -> LLVM.Module
-generateLLVM expr = LLVMIR.buildModule "simpl.ll" $ do
+generateLLVM :: [Decl Expr] -> LLVM.Module
+generateLLVM decls = LLVMIR.buildModule "simpl.ll" $ do
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
   (_, resultFmt) <- staticString ".resultformat" "Result: %.f\n"
-  (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ show (pretty expr) ++ "\n"
+  let srcCode = unlines $ show . pretty <$> decls
+  (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
+  forM_ decls declToLLVM
+
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
     _ <- LLVMIR.call printf [(msg, [])]
-
-    exprResult <- arithToLLVM expr
+    let mainTy = LLVM.ptr (LLVM.FunctionType LLVM.double [] False)
+    let mainName = LLVM.mkName "__simpl_main"
+    let mainRef = LLVM.ConstantOperand (LLVMC.GlobalReference mainTy mainName)
+    exprResult <- LLVMIR.call mainRef []
     _ <- LLVMIR.call printf [(exprSrc, [])]
     _ <- LLVMIR.call printf [(resultFmt, []), (exprResult, [])]
     retcode <- LLVMIR.int64 1
