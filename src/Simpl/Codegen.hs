@@ -4,7 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Simpl.Codegen where
 
-import Control.Monad (liftM2, forM_)
+import Control.Monad (liftM2, forM, forM_)
 import Control.Monad.Reader
 import Data.Functor.Foldable (cata, unfix)
 import Data.Text.Prettyprint.Doc (pretty)
@@ -139,6 +139,24 @@ arithToLLVM = cata $ \case
       pure ()
     dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
     LLVMIR.insertValue tagStruct2 dataPtr [1]
+  Case branches valM -> do
+    LLVMIR.ensureBlock
+    caseLabels <- forM branches $ \case
+      BrAdt _name _ _ -> LLVMIR.fresh
+    defLabel <- LLVMIR.freshName "case_default"
+    endLabel <- LLVMIR.freshName "case_end"
+    val <- valM
+    -- TODO: Look up type in symbol table to figure out tag value lookup
+    LLVMIR.switch val defLabel []
+    resVals <- forM (caseLabels `zip` (branchGetExpr <$> branches)) $ \(label, expr) -> do
+      LLVMIR.emitBlockStart label
+      res <- expr
+      LLVMIR.br endLabel
+      pure res
+    LLVMIR.emitBlockStart defLabel
+    LLVMIR.unreachable
+    LLVMIR.emitBlockStart endLabel
+    LLVMIR.phi (resVals `zip` caseLabels)
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args

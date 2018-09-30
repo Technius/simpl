@@ -7,3 +7,8 @@ fun main : Double := {
 fun foo : Foo := {
   Bar 5.0
 }
+
+fun foo2 : Bool := {
+  case Bar 5.0 of
+    Bar x => true
+}

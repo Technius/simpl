@@ -5,7 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Simpl.Typing where
 
-import Control.Monad (when)
+import Control.Monad (when, foldM, forM_)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
@@ -81,6 +81,19 @@ checkType expr ty = case unfix expr of
           traverse_ (uncurry unifyTy) (zip conArgs argTys)
           unifyTy (typeToUtype adtTy) ty
         Nothing -> throwError $ TyErrNoSuchCtor name
+    Case branches val -> do
+      valTy <- inferType val
+      -- TODO: Insert bound variables into context
+      forM_ branches $ \case
+        BrAdt ctorName bindings _ ->
+          asks (symTabLookupCtor ctorName) >>= \case
+            Just (dataTy, Ctor _ ctorArgs, _) -> do
+              when (length bindings /= length ctorArgs) $
+                throwError $ TyErrArgCount (length ctorArgs) (length bindings) ctorArgs
+              unifyTy valTy (typeToUtype dataTy)
+            Nothing -> throwError $ TyErrNoSuchCtor ctorName
+      brTys <- traverse (inferType . branchGetExpr) branches
+      foldM unifyTy ty brTys
   where
     doubleBinop x y = do
       ty1 <- checkType x (UTerm TyDouble)

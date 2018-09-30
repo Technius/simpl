@@ -12,7 +12,7 @@ import qualified Data.Text as Text
 import qualified Text.Megaparsec.Char as C
 import qualified Text.Megaparsec.Char.Lexer as L
 
-import Simpl.Ast (Expr, Decl, SourceFile, Type)
+import Simpl.Ast (Expr, Decl, SourceFile, Type, Branch)
 import qualified Simpl.Ast as Ast
 
 type Parser m a = ParsecT Void Text m a
@@ -30,7 +30,7 @@ parens :: Parser m a -> Parser m a
 parens = between (C.char '(') (C.char ')')
 
 reservedKeywords :: [Text]
-reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false"]
+reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of"]
 
 keyword :: Text -> Parser m Text
 keyword k = lexeme (C.string k <* notFollowedBy C.alphaNumChar)
@@ -87,8 +87,26 @@ adtCons = lexeme $ do
   args <- many (lexeme (parens expr) <|> atom)
   pure $ Ast.cons name args
 
+-- | Case analysis branch
+branch :: Parser m (Branch Expr)
+branch = lexeme $ do
+  name <- typeIdentifier
+  args <- many identifier
+  _ <- symbol "=>"
+  body <- expr
+  pure $ Ast.branchAdt name args body
+
+-- | Case analysis expression
+caseExpr :: Parser m Expr
+caseExpr = lexeme $ do
+  _ <- symbol "case"
+  val <- expr
+  _ <- symbol "of"
+  branches <- some branch
+  pure $ Ast.caseExpr branches val
+
 expr :: Parser m Expr
-expr = try ifExpr <|> try adtCons <|> arith
+expr = try caseExpr <|> try ifExpr <|> try adtCons <|> arith
 
 typeLit :: Parser m Type
 typeLit = Fix <$> ((symbol "Double" >> pure Ast.TyDouble)

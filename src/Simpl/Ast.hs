@@ -25,12 +25,20 @@ data ExprF a
   | Div !a !a -- ^ Divide (doubles)
   | If !a !a !a -- ^ If expression
   | Cons !Text ![a] -- ^ Construct ADT
+  | Case [Branch a] a -- ^ Case deconstruction
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
   = LitDouble Double
   | LitBool Bool
   deriving (Eq, Show)
+
+data Branch a = BrAdt Text [Text] a -- ^ Branch given constructor name, bindings, and expr
+  deriving (Functor, Foldable, Traversable, Show)
+
+branchGetExpr :: Branch a -> a
+branchGetExpr = \case
+  BrAdt _ _ e -> e
 
 type Expr = Fix ExprF
 
@@ -66,9 +74,19 @@ ifExpr cond t1 t2 = Fix (If cond t1 t2)
 cons :: Text -> [Expr] -> Expr
 cons name args = Fix (Cons name args)
 
+branchAdt :: Text -> [Text] -> Expr -> Branch Expr
+branchAdt = BrAdt
+
+caseExpr :: [Branch Expr] -> Expr -> Expr
+caseExpr branches val = Fix (Case branches val)
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitBool b) = pretty b
+
+instance Pretty a => Pretty (Branch a) where
+  pretty (BrAdt name bindings expr) =
+    hsep (pretty <$> name : bindings) <+> "=>" <> softline <> pretty expr
 
 instance Pretty Expr where
   pretty = para go
@@ -87,7 +105,11 @@ instance Pretty Expr where
         hsep ["if", wrapComplex cond, "then", t1, "else", t2]
       go (Cons name args) =
         pretty name <+> hsep (wrapComplex <$> args)
+      go (Case branches (_, valPpr)) =
+        "case" <+> valPpr <+> "of" <> softline <> (hang 2 . hsep $
+                                       pretty . fmap fst <$> branches)
 
+$(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
 
 -- | An [Expr] annotated with some data.
