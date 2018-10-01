@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Simpl.Typing where
 
+import Control.Applicative (liftA2)
 import Control.Monad (when, foldM, forM_)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
@@ -20,6 +21,8 @@ import Simpl.Analysis
 
 type UVar = IntVar
 type UType = UTerm TypeF UVar
+
+type TCExpr = AnnExpr UType
 
 data TypeError
   = TyErrOccurs UVar UType
@@ -56,11 +59,26 @@ inferType e = mkMetaVar >>= checkType e
 forceBindings :: UType -> Typecheck UType
 forceBindings v = Typecheck . lift $ applyBindings v
 
+literalType :: Literal -> TypeF a
+literalType = \case
+  LitBool _ -> TyBool
+  LitDouble _ -> TyDouble
+
+-- | Annotate every AST node with a unification meta variable
+attachExprMetaVar :: Expr -> Typecheck TCExpr
+attachExprMetaVar = cataM (\e -> Fix . flip AnnExprF e <$> mkMetaVar)
+
+-- | Resolve all unification variables, returning a well-typed AST if possible
+tcExprToTypedExpr :: TCExpr -> Typecheck (Maybe (AnnExpr Type))
+tcExprToTypedExpr =
+  cataM $ \(AnnExprF uty expr) -> do
+    ty <- utypeToType <$> forceBindings uty
+    let annExprF = liftA2 AnnExprF ty (sequence expr)
+    pure (Fix <$> annExprF)
+
 checkType :: Expr -> UType -> Typecheck UType
 checkType expr ty = case unfix expr of
-    Lit l -> case l of
-      LitBool _ -> unifyTy ty (UTerm TyBool)
-      LitDouble _ -> unifyTy ty (UTerm TyDouble)
+    Lit l -> unifyTy ty (UTerm (literalType l))
     Add t1 t2 -> doubleBinop t1 t2
     Sub t1 t2 -> doubleBinop t1 t2
     Mul t1 t2 -> doubleBinop t1 t2
