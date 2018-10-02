@@ -7,7 +7,7 @@ module Simpl.Typing where
 
 import Control.Applicative (liftA2)
 import Control.Monad (when, foldM, forM_)
-import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks)
+import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
@@ -117,6 +117,14 @@ inferType = cata $ \case
     let brTys = extractTy . branchGetExpr <$> branches
     resTy <- mkMetaVar
     annotate (Case branches val) <$> foldM unifyTy resTy brTys
+  Let name valM nextM -> do
+    val <- valM
+    -- TODO: Hack, fix this
+    case utypeToType (extractTy val) of
+      Just ty -> do
+        next <- local (symTabInsertVar name ty) nextM
+        pure $ annotate (Let name val next) (extractTy next)
+      Nothing -> throwError $ TyErrAmbiguousType (extractTy val)
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc

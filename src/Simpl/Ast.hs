@@ -25,7 +25,8 @@ data ExprF a
   | Div !a !a -- ^ Divide (doubles)
   | If !a !a !a -- ^ If expression
   | Cons !Text ![a] -- ^ Construct ADT
-  | Case [Branch a] a -- ^ Case deconstruction
+  | Case [Branch a] !a -- ^ Case deconstruction
+  | Let Text a a -- ^ Let expression
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -80,6 +81,9 @@ branchAdt = BrAdt
 caseExpr :: [Branch Expr] -> Expr -> Expr
 caseExpr branches val = Fix (Case branches val)
 
+letExpr :: Text -> Expr -> Expr -> Expr
+letExpr name val expr = Fix (Let name val expr)
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitBool b) = pretty b
@@ -108,6 +112,8 @@ instance Pretty Expr where
       go (Case branches (_, valPpr)) =
         "case" <+> valPpr <+> "of" <> softline <> (hang 2 . hsep $
                                        pretty . fmap fst <$> branches)
+      go (Let name (_, val) (_, expr)) =
+        hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)

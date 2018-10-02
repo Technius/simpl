@@ -172,6 +172,9 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
         LLVMIR.unreachable
         LLVMIR.emitBlockStart endLabel
         LLVMIR.phi (resVals `zip` caseLabels)
+      Let _name (_, valM) (_, exprM) -> do
+        _ <- valM
+        local id exprM -- TODO: Update variable bindings
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args

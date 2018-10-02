@@ -30,7 +30,7 @@ parens :: Parser m a -> Parser m a
 parens = between (C.char '(') (C.char ')')
 
 reservedKeywords :: [Text]
-reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of"]
+reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in"]
 
 keyword :: Text -> Parser m Text
 keyword k = lexeme (C.string k <* notFollowedBy C.alphaNumChar)
@@ -105,8 +105,17 @@ caseExpr = lexeme $ do
   branches <- some branch
   pure $ Ast.caseExpr branches val
 
+letExpr :: Parser m Expr
+letExpr = lexeme $ do
+  _ <- symbol "let"
+  name <- identifier
+  _ <- symbol "="
+  val <- expr
+  _ <- symbol "in"
+  Ast.letExpr name val <$> expr
+
 expr :: Parser m Expr
-expr = try caseExpr <|> try ifExpr <|> try adtCons <|> arith
+expr = try letExpr <|> try caseExpr <|> try ifExpr <|> try adtCons <|> arith
 
 typeLit :: Parser m Type
 typeLit = Fix <$> ((symbol "Double" >> pure Ast.TyDouble)
