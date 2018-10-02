@@ -2,16 +2,19 @@
 {-# OPTIONS_GHC -Wno-incomplete-record-updates #-} -- Suppress LLVM sum type of records AST warnings
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Simpl.Codegen where
 
-import Control.Monad (liftM2, forM, forM_)
+import Control.Monad (liftM2, forM, forM_, mapM_)
 import Control.Monad.Reader
-import Data.Functor.Foldable (cata, unfix)
+import Data.Functor.Foldable (para, unfix)
 import Data.Text.Prettyprint.Doc (pretty)
 import Data.Char (ord)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Map as Map
 import qualified LLVM.AST as LLVM
 import qualified LLVM.AST.Linkage as LLVM
 import qualified LLVM.AST.Constant as LLVMC
@@ -24,6 +27,7 @@ import qualified LLVM.IRBuilder.Constant as LLVMIR
 
 import Simpl.Ast
 import Simpl.Analysis
+import Simpl.Typing (TypedExpr)
 
 llvmByte :: Integer -> LLVMC.Constant
 llvmByte = LLVMC.Int 8
@@ -88,75 +92,86 @@ literalToLLVM = \case
   LitDouble x -> LLVMIR.double x
   LitBool b -> LLVMIR.bit (if b then 1 else 0)
 
-arithToLLVM :: (LLVMIR.MonadIRBuilder m, MonadReader (SymbolTable Expr) m)
-            => Expr
+arithToLLVM :: forall m. (LLVMIR.MonadIRBuilder m, MonadReader (SymbolTable TypedExpr) m)
+            => TypedExpr
             -> m LLVM.Operand
-arithToLLVM = cata $ \case
-  Lit l -> literalToLLVM l
-  Add x y -> liftM2 (,) x y >>= uncurry LLVMIR.fadd
-  Sub x y -> liftM2 (,) x y >>= uncurry LLVMIR.fsub
-  Mul x y -> liftM2 (,) x y >>= uncurry LLVMIR.fmul
-  Div x y -> liftM2 (,) x y >>= uncurry LLVMIR.fdiv
-  If condInstr t1Instr t2Instr -> do
-    LLVMIR.ensureBlock
-    cond <- condInstr
-    trueLabel <- LLVMIR.freshName "if_then"
-    falseLabel <- LLVMIR.freshName "if_else"
-    endLabel <- LLVMIR.freshName "if_end"
-    LLVMIR.condBr cond trueLabel falseLabel
-    LLVMIR.emitBlockStart trueLabel
-    t1Res <- t1Instr
-    LLVMIR.br endLabel
-    LLVMIR.emitBlockStart falseLabel
-    t2Res <- t2Instr
-    LLVMIR.br endLabel
-    LLVMIR.emitBlockStart endLabel
-    LLVMIR.phi [(t1Res, trueLabel), (t2Res, falseLabel)]
-  Cons ctorName args -> do
-    -- Assume constructor exists, since typechecker should verify it anyways
-    (dataTy, _, ctorIndex) <- asks (fromJust . symTabLookupCtor ctorName)
-    ctorIndex' <- LLVMIR.int32 (fromIntegral ctorIndex)
-    let tagStruct1 = LLVM.ConstantOperand $ LLVMC.Undef (typeToLLVM dataTy)
-    -- Tag
-    tagStruct2 <- LLVMIR.insertValue tagStruct1 ctorIndex' [0]
-    -- Data pointer
-    let ctorTy = LLVM.NamedTypeReference (llvmName ctorName)
-    let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
-    -- Use offsets to calculate struct size
-    ctorStructSize <- flip LLVMIR.ptrtoint LLVM.i64
-                      =<< LLVMIR.gep nullptr
-                      =<< pure <$> LLVMIR.int32 0
-    -- Allocate memory for constructor.
-    -- For now, use "leak memory" as an implementation strategy for deallocation.
-    ctorStructPtr <- LLVMIR.call mallocRef [(ctorStructSize, [])] >>=
-                     flip LLVMIR.bitcast (LLVM.ptr ctorTy)
-    values <- sequence args
-    indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
-    ptrOffset <- LLVMIR.int32 0
-    forM_ (indices `zip` values) $ \(index, v) -> do
-      valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
-      LLVMIR.store valuePtr 0 v
-      pure ()
-    dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
-    LLVMIR.insertValue tagStruct2 dataPtr [1]
-  Case branches valM -> do
-    LLVMIR.ensureBlock
-    caseLabels <- forM branches $ \case
-      BrAdt _name _ _ -> LLVMIR.fresh
-    defLabel <- LLVMIR.freshName "case_default"
-    endLabel <- LLVMIR.freshName "case_end"
-    val <- valM
-    -- TODO: Look up type in symbol table to figure out tag value lookup
-    LLVMIR.switch val defLabel []
-    resVals <- forM (caseLabels `zip` (branchGetExpr <$> branches)) $ \(label, expr) -> do
-      LLVMIR.emitBlockStart label
-      res <- expr
-      LLVMIR.br endLabel
-      pure res
-    LLVMIR.emitBlockStart defLabel
-    LLVMIR.unreachable
-    LLVMIR.emitBlockStart endLabel
-    LLVMIR.phi (resVals `zip` caseLabels)
+arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
+  where
+    go :: ExprF (TypedExpr, m LLVM.Operand) -> m LLVM.Operand
+    go = \case
+      Lit l -> literalToLLVM l
+      Add (_, x) (_, y) -> liftM2 (,) x y >>= uncurry LLVMIR.fadd
+      Sub (_, x) (_, y) -> liftM2 (,) x y >>= uncurry LLVMIR.fsub
+      Mul (_, x) (_, y) -> liftM2 (,) x y >>= uncurry LLVMIR.fmul
+      Div (_, x) (_, y) -> liftM2 (,) x y >>= uncurry LLVMIR.fdiv
+      If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
+        LLVMIR.ensureBlock
+        cond <- condInstr
+        trueLabel <- LLVMIR.freshName "if_then"
+        falseLabel <- LLVMIR.freshName "if_else"
+        endLabel <- LLVMIR.freshName "if_end"
+        LLVMIR.condBr cond trueLabel falseLabel
+        LLVMIR.emitBlockStart trueLabel
+        t1Res <- t1Instr
+        LLVMIR.br endLabel
+        LLVMIR.emitBlockStart falseLabel
+        t2Res <- t2Instr
+        LLVMIR.br endLabel
+        LLVMIR.emitBlockStart endLabel
+        LLVMIR.phi [(t1Res, trueLabel), (t2Res, falseLabel)]
+      Cons ctorName argPairs -> do
+        let args = snd <$> argPairs
+        -- Assume constructor exists, since typechecker should verify it anyways
+        (dataTy, _, ctorIndex) <- asks (fromJust . symTabLookupCtor ctorName)
+        ctorIndex' <- LLVMIR.int32 (fromIntegral ctorIndex)
+        let tagStruct1 = LLVM.ConstantOperand $ LLVMC.Undef (typeToLLVM dataTy)
+        -- Tag
+        tagStruct2 <- LLVMIR.insertValue tagStruct1 ctorIndex' [0]
+        -- Data pointer
+        let ctorTy = LLVM.NamedTypeReference (llvmName ctorName)
+        let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
+        -- Use offsets to calculate struct size
+        ctorStructSize <- flip LLVMIR.ptrtoint LLVM.i64
+                          =<< LLVMIR.gep nullptr
+                          =<< pure <$> LLVMIR.int32 0
+        -- Allocate memory for constructor.
+        -- For now, use "leak memory" as an implementation strategy for deallocation.
+        ctorStructPtr <- LLVMIR.call mallocRef [(ctorStructSize, [])] >>=
+                         flip LLVMIR.bitcast (LLVM.ptr ctorTy)
+        values <- sequence args
+        indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
+        ptrOffset <- LLVMIR.int32 0
+        forM_ (indices `zip` values) $ \(index, v) -> do
+          valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
+          LLVMIR.store valuePtr 0 v
+          pure ()
+        dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
+        LLVMIR.insertValue tagStruct2 dataPtr [1]
+      Case branches (valExpr, valM) -> do
+        LLVMIR.ensureBlock
+        allCaseLabels <- forM branches $ \case
+          BrAdt name _ _ -> (name, ) <$> LLVMIR.fresh
+        defLabel <- LLVMIR.freshName "case_default"
+        endLabel <- LLVMIR.freshName "case_end"
+        val <- valM
+        -- Assume the symbol table and type information is correct
+        let dataName = fromJust $
+              case unfix . annGetAnn . unfix $ valExpr of { TyAdt n -> Just n; _ -> Nothing }
+        ctorNames <- asks (fmap ctorGetName . snd . fromJust . symTabLookupAdt dataName)
+        let usedLabelTriples = filter ((`elem` ctorNames) . fst . snd) $ [0..] `zip` allCaseLabels
+        let jumpTable = (\(i, (_, l)) -> (LLVMC.Int 32 i, l)) <$> usedLabelTriples
+        let caseLabels = snd <$> jumpTable
+        tag <- LLVMIR.extractValue val [0]
+        LLVMIR.switch tag defLabel jumpTable
+        resVals <- forM (jumpTable `zip` (snd . branchGetExpr <$> branches)) $ \((_, label), expr) -> do
+          LLVMIR.emitBlockStart label
+          res <- expr
+          LLVMIR.br endLabel
+          pure res
+        LLVMIR.emitBlockStart defLabel
+        LLVMIR.unreachable
+        LLVMIR.emitBlockStart endLabel
+        LLVMIR.phi (resVals `zip` caseLabels)
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args
@@ -169,28 +184,34 @@ typeToLLVM = go . unfix
       TyBool -> LLVM.i1
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
 
-declToLLVM :: (LLVMIR.MonadModuleBuilder m, MonadReader (SymbolTable Expr) m)
-           => Decl Expr
+adtToLLVM :: LLVMIR.MonadModuleBuilder m
+           => Text
+           -> [Constructor]
            -> m ()
-declToLLVM d = case d of
-  DeclFun name ty body ->
+adtToLLVM adtName ctors = do
+  let adtType = LLVM.StructureType
+        { LLVM.isPacked = True
+        , LLVM.elementTypes = [LLVM.i32, LLVM.ptr LLVM.i8] }
+  LLVMIR.typedef (llvmName adtName) (Just adtType)
+  forM_ ctors $ \(Ctor ctorName args) -> do
+    let ctorType = LLVM.StructureType
+          { LLVM.isPacked = True
+          , LLVM.elementTypes = typeToLLVM <$> args }
+    LLVMIR.typedef (llvmName ctorName) (Just ctorType)
+
+funToLLVM :: (LLVMIR.MonadModuleBuilder m, MonadReader (SymbolTable TypedExpr) m)
+           => Text
+           -> Type
+           -> TypedExpr
+           -> m LLVM.Operand
+funToLLVM name ty body =
     let name' = if name == "main" then "__simpl_main" else name
         defn = LLVMIR.function (llvmName name') [] (typeToLLVM ty) $ \_args -> do
           retval <- arithToLLVM body
           LLVMIR.ret retval
-    in defn >> pure ()
-  DeclAdt adtName ctors -> do
-    let adtType = LLVM.StructureType
-          { LLVM.isPacked = True
-          , LLVM.elementTypes = [LLVM.i32, LLVM.ptr LLVM.i8] }
-    LLVMIR.typedef (llvmName adtName) (Just adtType)
-    forM_ ctors $ \(Ctor ctorName args) -> do
-      let ctorType = LLVM.StructureType
-            { LLVM.isPacked = True
-            , LLVM.elementTypes = typeToLLVM <$> args }
-      LLVMIR.typedef (llvmName ctorName) (Just ctorType)
+    in defn
 
-generateLLVM :: [Decl Expr] -> Reader (SymbolTable Expr) LLVM.Module
+generateLLVM :: [Decl Expr] -> Reader (SymbolTable TypedExpr) LLVM.Module
 generateLLVM decls = LLVMIR.buildModuleT "simpl.ll" $ do
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
@@ -199,7 +220,8 @@ generateLLVM decls = LLVMIR.buildModuleT "simpl.ll" $ do
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
-  forM_ decls declToLLVM
+  asks (Map.toList . symTabFuns) >>= (mapM_ $ \(name, (ty, body)) -> funToLLVM name ty body)
+  asks (Map.toList . symTabAdts) >>= (mapM_ $ \(name, (_, ctors)) -> adtToLLVM name ctors)
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
     _ <- LLVMIR.call printf [(msg, [])]

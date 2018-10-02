@@ -151,7 +151,7 @@ instance Pretty Type where
 
 -- * Source File Types
 
-data Constructor = Ctor Text [Type]
+data Constructor = Ctor { ctorGetName :: Text, ctorGetArgs :: [Type] }
   deriving (Show)
 
 instance Pretty Constructor where

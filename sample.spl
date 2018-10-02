@@ -1,6 +1,14 @@
 data Foo = Bar Double
 
+data MaybeI = JustI Double | Nothing
+
 fun main : Double := {
+  case Nothing of
+    JustI x => 1.0
+    Nothing => 10.0
+}
+
+fun asdf : Double := {
   (if false then 5.0 else 10.0) + 2
 }
 

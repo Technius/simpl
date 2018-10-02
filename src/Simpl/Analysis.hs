@@ -1,8 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 module Simpl.Analysis where
 
 import Data.Functor.Foldable (Fix(Fix))
-import Data.Bifunctor (second)
 import Data.List (find)
 import Data.Maybe (mapMaybe, listToMaybe)
 import Data.Map.Strict (Map)
@@ -13,6 +15,7 @@ import Simpl.Ast
 data SymbolTable expr = MkSymbolTable
   { symTabAdts :: Map Text (Type, [Constructor])
   , symTabFuns :: Map Text (Type, expr) }
+  deriving (Show, Functor, Foldable, Traversable)
 
 buildSymbolTable :: SourceFile e -> SymbolTable e
 buildSymbolTable (SourceFile _ decls) =
@@ -33,8 +36,8 @@ symTabModifyAdts :: (Map Text (Type, [Constructor]) -> Map Text (Type, [Construc
                  -> SymbolTable e
 symTabModifyAdts f t = t { symTabAdts = f (symTabAdts t) }
 
-symTabMapFuns :: (e -> e') -> SymbolTable e -> SymbolTable e'
-symTabMapFuns f t = t { symTabFuns = Map.map (second f) (symTabFuns t) }
+symTabMapFuns :: ((Type, e) -> (Type, e')) -> SymbolTable e -> SymbolTable e'
+symTabMapFuns f t = t { symTabFuns = Map.map f (symTabFuns t) }
 
 -- | Searches for the given constructor, returning the name of the ADT, the
 -- constructor, and the index of the constructor.
@@ -43,3 +46,6 @@ symTabLookupCtor name t = listToMaybe . mapMaybe (find isTheCtor) $ getCtors
   where
     getCtors = (\(ty, cs) -> zip3 (repeat ty) cs [0..]) <$> Map.elems (symTabAdts t)
     isTheCtor (_, Ctor ctorName _, _) = ctorName == name
+
+symTabLookupAdt :: Text -> SymbolTable e -> Maybe (Type, [Constructor])
+symTabLookupAdt name = Map.lookup name . symTabAdts
