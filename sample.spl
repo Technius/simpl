@@ -3,9 +3,9 @@ data Foo = Bar Double
 data MaybeI = JustI Double | Nothing
 
 fun main : Double := {
-  case Nothing of
-    JustI x => 1.0
-    Nothing => 10.0
+  case JustI 10.0 of
+    JustI x => x + 1.0
+    Nothing => 1.0
 }
 
 fun asdf : Double := {

@@ -27,6 +27,7 @@ data ExprF a
   | Cons !Text ![a] -- ^ Construct ADT
   | Case [Branch a] !a -- ^ Case deconstruction
   | Let Text a a -- ^ Let expression
+  | Var Text -- ^ Variable
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -41,6 +42,10 @@ branchGetExpr :: Branch a -> a
 branchGetExpr = \case
   BrAdt _ _ e -> e
 
+branchGetBindings :: Branch a -> [Text]
+branchGetBindings = \case
+  BrAdt _ vars _ -> vars
+
 type Expr = Fix ExprF
 
 isComplexExpr :: Expr -> Bool
@@ -49,6 +54,7 @@ isComplexExpr (Fix e) = case e of
     case l of
       LitDouble d -> d < 0
       _ -> False
+  Var _ -> False
   _ -> True
 
 litDouble :: Double -> Expr
@@ -84,6 +90,9 @@ caseExpr branches val = Fix (Case branches val)
 letExpr :: Text -> Expr -> Expr -> Expr
 letExpr name val expr = Fix (Let name val expr)
 
+var :: Text -> Expr
+var = Fix . Var
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitBool b) = pretty b
@@ -114,6 +123,7 @@ instance Pretty Expr where
                                        pretty . fmap fst <$> branches)
       go (Let name (_, val) (_, expr)) =
         hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
+      go (Var name) = pretty name
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)

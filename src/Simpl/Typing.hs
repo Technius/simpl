@@ -6,7 +6,7 @@
 module Simpl.Typing where
 
 import Control.Applicative (liftA2)
-import Control.Monad (when, foldM, forM_)
+import Control.Monad (when, foldM, forM)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
@@ -15,6 +15,7 @@ import Data.Foldable (traverse_)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
+import qualified Data.Map as Map
 
 import Simpl.Ast
 import Simpl.Analysis
@@ -31,6 +32,7 @@ data TypeError
   | TyErrArgCount Int Int [Type] -- ^ Expected count, actual count, expected arg types
   | TyErrNoSuchCtor Text
   | TyErrAmbiguousType UType
+  | TyErrNoSuchVar Text
   deriving (Show)
 
 instance Fallible TypeF UVar TypeError where
@@ -104,15 +106,17 @@ inferType = cata $ \case
   Case branchMs valM -> do
     val <- valM
     let valTy = extractTy val
-    branches <- sequence (sequence <$> branchMs)
-    -- TODO: Insert bound variables into context
-    forM_ branches $ \case
-      BrAdt ctorName bindings _ ->
+    branches <- forM branchMs $ \case
+      BrAdt ctorName bindings exprM ->
         asks (symTabLookupCtor ctorName) >>= \case
           Just (dataTy, Ctor _ ctorArgs, _) -> do
             when (length bindings /= length ctorArgs) $
               throwError $ TyErrArgCount (length ctorArgs) (length bindings) ctorArgs
-            unifyTy valTy (typeToUtype dataTy)
+            _ <- unifyTy valTy (typeToUtype dataTy)
+            let updatedBinds = Map.fromList (bindings `zip` ctorArgs)
+            -- Infer result type with ctor args bound
+            expr <- local (\t -> t { symTabVars = Map.union (symTabVars t) updatedBinds }) exprM
+            pure $ BrAdt ctorName bindings expr
           Nothing -> throwError $ TyErrNoSuchCtor ctorName
     let brTys = extractTy . branchGetExpr <$> branches
     resTy <- mkMetaVar
@@ -125,6 +129,10 @@ inferType = cata $ \case
         next <- local (symTabInsertVar name ty) nextM
         pure $ annotate (Let name val next) (extractTy next)
       Nothing -> throwError $ TyErrAmbiguousType (extractTy val)
+  Var name ->
+    asks (symTabLookupVar name) >>= \case
+      Just ty -> pure $ annotate (Var name) (typeToUtype ty)
+      Nothing -> throwError $ TyErrNoSuchVar name
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc

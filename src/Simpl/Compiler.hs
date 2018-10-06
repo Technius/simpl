@@ -2,16 +2,15 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TupleSections #-}
 module Simpl.Compiler where
-
 import Control.Monad.Except
-import Control.Monad.Reader
+
 import Control.Monad.State
 import qualified LLVM.AST as LLVM
 
 import Simpl.Analysis
 import Simpl.Ast
-import Simpl.Codegen (generateLLVM)
-import Simpl.Typing (TypeError, runTypecheck, checkType, inferType, tcExprToTypedExpr)
+import Simpl.Codegen (runCodegen)
+import Simpl.Typing (TypeError, runTypecheck, checkType)
 
 -- | Main error type, aggregating all error types.
 data CompilerErr
@@ -40,8 +39,7 @@ fullCompilerPipeline srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
     symTable <- get
     let tycheckFuns (ty, expr) = (ty, checkType ty expr)
-        tycheckVars = inferType >=> tcExprToTypedExpr
-    let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns tycheckVars symTable
+    let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns symTable
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)
-    pure $ runReader (generateLLVM decls) typedSymTable
+    pure $ runCodegen decls typedSymTable

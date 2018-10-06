@@ -44,7 +44,7 @@ identifier = lexeme go >>= check
         then fail $ Text.unpack w ++ " is a reserved keyword"
         else pure w
     go :: Parser m Text
-    go = Text.cons <$> (C.letterChar <|> C.char '_')
+    go = Text.cons <$> (C.lowerChar <|> C.char '_')
       <*> (Text.pack <$> many (C.alphaNumChar <|> C.char '_'))
 
 literal :: Parser m Expr
@@ -55,9 +55,12 @@ literal = lexeme (bool <|> number)
     signed = L.signed whitespace
     decimal = signed (fromIntegral <$> (L.decimal :: Parser m Int))
 
+var :: Parser m Expr
+var = Ast.var <$> identifier
+
 -- | Non-recursive component of expression gramamr
 atom :: Parser m Expr
-atom = literal
+atom = literal <|> var
 
 -- | Arithmetic expression parser
 arith :: Parser m Expr
@@ -84,7 +87,7 @@ ifExpr = lexeme $ do
 adtCons :: Parser m Expr
 adtCons = lexeme $ do
   name <- typeIdentifier
-  args <- many (lexeme (parens expr) <|> atom)
+  args <- many (lexeme (parens expr) <|> try atom)
   pure $ Ast.cons name args
 
 -- | Case analysis branch
