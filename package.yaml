@@ -32,6 +32,7 @@ dependencies:
 - unification-fd
 - mtl
 - containers
+- bytestring
 
 library:
   source-dirs: src
