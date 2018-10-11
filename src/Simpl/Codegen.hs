@@ -24,6 +24,7 @@ import Data.Map (Map)
 import Data.Functor.Identity
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Semigroup
+import Data.String (fromString)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as Text
 import qualified Data.Map as Map
@@ -85,29 +86,32 @@ newtype Result = Branching (NonEmpty (LLVM.Operand, LLVM.Name))
   deriving (Show, Eq, Ord, Semigroup)
 
 joinPoint :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-          => NonEmpty Result
+          => m (NonEmpty Result)
           -> m (NonEmpty LLVM.Operand)
-joinPoint results = do
+joinPoint resultsM = do
   currentBlk <- LLVMIR.currentBlock
   currentJp <- gets tableCurrentJoin
+  newJp <- LLVMIR.freshName "join_point"
+  modify (\t -> t { tableCurrentJoin = newJp })
+  results <- resultsM
   let maxNumBr = maximum $ (\(Branching brs) -> NE.length brs) <$> results
       -- We're jumping if the operand origin is not from this block (TODO: not
       -- always true, e.g. variable definitions)
       resIsJump (_, n) = n /= currentBlk
       hasJump = any (\(Branching brs) -> any resIsJump brs) results
   when (maxNumBr > 1 || hasJump) $ do
-    LLVMIR.emitBlockStart currentJp
-    newJp <- LLVMIR.freshName "join_point"
-    modify (\t -> t { tableCurrentJoin = newJp })
+    LLVMIR.emitBlockStart newJp
+    -- modify (\t -> t { tableCurrentJoin = newJp })
+  modify (\t -> t { tableCurrentJoin = currentJp })
   forM results $ \(Branching brs) ->
     if length brs == 1
       then pure (fst (NE.head brs))
       else LLVMIR.phi (NE.toList brs)
 
 joinPoint1 :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-           => Result
+           => m Result
            -> m LLVM.Operand
-joinPoint1 = fmap NE.head . joinPoint . (:| [])
+joinPoint1 = fmap NE.head . joinPoint . fmap (:| [])
 
 resultValue :: LLVMIR.MonadIRBuilder m => LLVM.Operand -> m Result
 resultValue v = (\name -> Branching ((v, name) :| [])) <$> LLVMIR.currentBlock
@@ -182,7 +186,7 @@ literalToLLVM = \case
   LitBool b -> LLVMIR.bit (if b then 1 else 0) >>= resultValue
 
 arithToLLVM :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
-arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
+arithToLLVM = para (go . annGetExpr)
   where
     go :: ExprF (TypedExpr, LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result)
        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
@@ -194,13 +198,13 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
       Div (_, x) (_, y) -> binop x y LLVMIR.fdiv
       If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
         LLVMIR.ensureBlock
-        cond <- condInstr >>= joinPoint1
+        cond <- joinPoint1 condInstr
         trueLabel <- LLVMIR.freshName "if_then"
         falseLabel <- LLVMIR.freshName "if_else"
-        jp <- gets tableCurrentJoin
         LLVMIR.condBr cond trueLabel falseLabel
         LLVMIR.emitBlockStart trueLabel
         t1Res <- t1Instr
+        jp <- gets tableCurrentJoin
         LLVMIR.br jp
         LLVMIR.emitBlockStart falseLabel
         t2Res <- t2Instr
@@ -225,14 +229,16 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
         -- For now, use "leak memory" as an implementation strategy for deallocation.
         ctorStructPtr <- LLVMIR.call mallocRef [(ctorStructSize, [])] >>=
                          flip LLVMIR.bitcast (LLVM.ptr ctorTy)
-        values <- sequence args
-        indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
-        ptrOffset <- LLVMIR.int32 0
-        forM_ (indices `zip` values) $ \(index, v) -> do
-          v' <- joinPoint1 v -- TODO: Do this properly
-          valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
-          LLVMIR.store valuePtr 0 v'
-          pure ()
+        if null args
+          then pure ()
+          else do
+            values <- joinPoint (NE.fromList <$> sequence args)
+            indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
+            ptrOffset <- LLVMIR.int32 0
+            forM_ (indices `zip` NE.toList values) $ \(index, v) -> do
+              valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
+              LLVMIR.store valuePtr 0 v
+              pure ()
         dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
         fullyInit <- LLVMIR.insertValue tagStruct2 dataPtr [1]
         resultValue fullyInit
@@ -240,9 +246,11 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
         LLVMIR.ensureBlock
         defLabel <- LLVMIR.freshName "case_default"
         endLabel <- gets tableCurrentJoin
-        val <- joinPoint1 =<< valM
+        val <- joinPoint1 valM
         allCaseLabels <- forM branches $ \case
-          BrAdt name _ _ -> (name, ) <$> LLVMIR.fresh
+          BrAdt name _ _ ->
+            let labelName = "case_" <> fromString (Text.unpack name) in
+            (name, ) <$> LLVMIR.freshName labelName
         -- Assume the symbol table and type information is correct
         let dataName = fromJust $
               case unfix . annGetAnn . unfix $ valExpr of { TyAdt n -> Just n; _ -> Nothing }
@@ -274,7 +282,7 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
         LLVMIR.unreachable
         pure (sconcat (NE.fromList resVals))
       Let name (valExpr, valM) (_, exprM) -> do
-        val <- joinPoint1 =<< valM
+        val <- joinPoint1 valM
         let valTy = annGetAnn . unfix $ valExpr
         ptr <- LLVMIR.alloca (typeToLLVM valTy) Nothing 0
         LLVMIR.store ptr 0 val
@@ -290,7 +298,7 @@ arithToLLVM = para (\typedExpr -> go (annGetExpr typedExpr))
           -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
           -> m Result
     binop x y op = do
-      xy <- liftM2 (:|) x ((:[]) <$> y) >>= joinPoint
+      xy <- joinPoint (liftM2 (\a b -> (a :| [b])) x y)
       let x' = NE.head xy
           y' = head (NE.tail xy)
       res <- op x' y'
@@ -333,7 +341,7 @@ funToLLVM name ty body =
          LLVMIR.ensureBlock
          endLabel <- LLVMIR.freshName "function_end"
          modify (\t -> t { tableCurrentJoin = endLabel })
-         retval <- joinPoint1 =<< arithToLLVM body
+         retval <- joinPoint1 (arithToLLVM body)
          LLVMIR.ret retval
 
 initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
