@@ -99,7 +99,7 @@ instance Pretty Literal where
 
 instance Pretty a => Pretty (Branch a) where
   pretty (BrAdt name bindings expr) =
-    hsep (pretty <$> name : bindings) <+> "=>" <> softline <> pretty expr
+    hang 2 $ hsep (pretty <$> name : bindings) <+> "=>" <> softline <> pretty expr
 
 instance Pretty Expr where
   pretty = para go
@@ -119,10 +119,10 @@ instance Pretty Expr where
       go (Cons name args) =
         pretty name <+> hsep (wrapComplex <$> args)
       go (Case branches (_, valPpr)) =
-        "case" <+> valPpr <+> "of" <> softline <> (hang 2 . hsep $
-                                       pretty . fmap fst <$> branches)
+        hang 2 $ "case" <+> valPpr <+> "of" <> line <> (vsep $
+                                                            pretty . fmap fst <$> branches)
       go (Let name (_, val) (_, expr)) =
-        hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
+        align $ hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
       go (Var name) = pretty name
 
 $(deriveShow1 ''Branch)
@@ -183,7 +183,7 @@ instance Pretty e => Pretty (Decl e) where
     DeclFun name ty expr ->
       hsep ["fun", pretty name, ":", pretty ty, "="] <> softline <> pretty expr
     DeclAdt name ctors ->
-      hsep ["data", pretty name] <+> encloseSep "=" emptyDoc " | " (pretty <$> ctors)
+      hsep ["data", pretty name] <+> encloseSep "= " emptyDoc " | " (pretty <$> ctors)
 
 data SourceFile e = SourceFile Text [Decl e]
   deriving (Show, Functor)
