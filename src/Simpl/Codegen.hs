@@ -23,7 +23,7 @@ import Data.Text (Text)
 import Data.Map (Map)
 import Data.Functor.Identity
 import Data.List.NonEmpty (NonEmpty(..))
-import Data.Semigroup
+
 import Data.String (fromString)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as Text
@@ -82,45 +82,62 @@ instance Monad m => MonadReader CodegenTable (CodegenT m) where
     put curTable
     pure result
 
-newtype Result = Branching (NonEmpty (LLVM.Operand, LLVM.Name))
-  deriving (Show, Eq, Ord, Semigroup)
+data Result = Values (NonEmpty LLVM.Operand) | Branching (NonEmpty (LLVM.Operand, LLVM.Name))
+  deriving (Show, Eq)
+
+instance Ord Result where
+  compare (Values v1) (Values v2) = compare v1 v2
+  compare (Values _) (Branching _) = GT
+  compare (Branching _) (Values _) = LT
+  compare (Branching br1) (Branching br2) = compare br1 br2
+
+resultHasJump :: Result -> Bool
+resultHasJump (Values _) = False
+resultHasJump (Branching _) = True
 
 joinPoint :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m (NonEmpty Result)
           -> m (NonEmpty LLVM.Operand)
 joinPoint resultsM = do
-  currentBlk <- LLVMIR.currentBlock
   currentJp <- gets tableCurrentJoin
   newJp <- LLVMIR.freshName "join_point"
   modify (\t -> t { tableCurrentJoin = newJp })
   results <- resultsM
-  let maxNumBr = maximum $ (\(Branching brs) -> NE.length brs) <$> results
-      -- We're jumping if the operand origin is not from this block (TODO: not
-      -- always true, e.g. variable definitions)
-      resIsJump (_, n) = n /= currentBlk
-      hasJump = any (\(Branching brs) -> any resIsJump brs) results
-  when (maxNumBr > 1 || hasJump) $ do
-    LLVMIR.emitBlockStart newJp
     -- modify (\t -> t { tableCurrentJoin = newJp })
   modify (\t -> t { tableCurrentJoin = currentJp })
-  forM results $ \(Branching brs) ->
-    if length brs == 1
-      then pure (fst (NE.head brs))
-      else LLVMIR.phi (NE.toList brs)
+  let hasJump = any resultHasJump results
+  when hasJump $
+    LLVMIR.emitBlockStart newJp
+  let go (Values v) = pure v
+      go (Branching brs) =
+        if length brs == 1
+          then pure (fst <$> brs)
+          else (:| []) <$> LLVMIR.phi (NE.toList brs)
+  join <$> traverse go (NE.sort results)
 
 joinPoint1 :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
            => m Result
            -> m LLVM.Operand
 joinPoint1 = fmap NE.head . joinPoint . fmap (:| [])
 
-resultValue :: LLVMIR.MonadIRBuilder m => LLVM.Operand -> m Result
-resultValue v = (\name -> Branching ((v, name) :| [])) <$> LLVMIR.currentBlock
-
-resultBranchWith :: LLVM.Name -> LLVM.Operand -> Result
-resultBranchWith n v = resultBranching ((v, n) :| [])
+resultValue :: LLVM.Operand -> Result
+resultValue v = Values (v :| [])
 
 resultBranching :: NonEmpty (LLVM.Operand, LLVM.Name) -> Result
 resultBranching = Branching
+
+resultEnsureBranch :: LLVMIR.MonadIRBuilder m => Result -> m Result
+resultEnsureBranch = \case
+  Values vs -> LLVMIR.currentBlock >>= \cb -> pure $ Branching ((, cb) <$> vs)
+  b@Branching {} -> pure b
+
+resultCombine :: LLVMIR.MonadIRBuilder m => Result -> Result -> m Result
+resultCombine (Values v1) (Values v2) = pure $ Values (v1 <> v2)
+resultCombine (Values v1) (Branching br2) =
+  LLVMIR.currentBlock >>= \cb -> pure $ Branching (((, cb) <$> v1) <> br2)
+resultCombine (Branching br1) (Values v2) =
+  LLVMIR.currentBlock >>= \cb -> pure $ Branching (br1 <> ((, cb) <$> v2))
+resultCombine (Branching br1) (Branching br2) = pure $ Branching (br1 <> br2)
 
 llvmByte :: Integer -> LLVMC.Constant
 llvmByte = LLVMC.Int 8
@@ -182,8 +199,8 @@ mallocRef = LLVM.ConstantOperand $
 
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
-  LitDouble x -> LLVMIR.double x >>= resultValue
-  LitBool b -> LLVMIR.bit (if b then 1 else 0) >>= resultValue
+  LitDouble x -> resultValue <$> LLVMIR.double x
+  LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
 
 arithToLLVM :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
 arithToLLVM = para (go . annGetExpr)
@@ -203,13 +220,13 @@ arithToLLVM = para (go . annGetExpr)
         falseLabel <- LLVMIR.freshName "if_else"
         LLVMIR.condBr cond trueLabel falseLabel
         LLVMIR.emitBlockStart trueLabel
-        t1Res <- t1Instr
+        t1Res <- t1Instr >>= resultEnsureBranch
         jp <- gets tableCurrentJoin
         LLVMIR.br jp
         LLVMIR.emitBlockStart falseLabel
-        t2Res <- t2Instr
+        t2Res <- t2Instr >>= resultEnsureBranch
         LLVMIR.br jp
-        pure $ t1Res <> t2Res
+        resultCombine t1Res t2Res
       Cons name argPairs -> do
         let args = snd <$> argPairs
         -- Assume constructor exists, since typechecker should verify it anyways
@@ -241,7 +258,7 @@ arithToLLVM = para (go . annGetExpr)
               pure ()
         dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
         fullyInit <- LLVMIR.insertValue tagStruct2 dataPtr [1]
-        resultValue fullyInit
+        pure $ resultValue fullyInit
       Case branches (valExpr, valM) -> do
         LLVMIR.ensureBlock
         defLabel <- LLVMIR.freshName "case_default"
@@ -275,12 +292,14 @@ arithToLLVM = para (go . annGetExpr)
             v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
                  >>= flip LLVMIR.bitcast (LLVM.ptr ty)
             pure (n, v)
-          res <- local (\t -> t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }) expr
+          let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
+          res <- local updateTable expr >>= resultEnsureBranch
           LLVMIR.br endLabel
           pure res
         LLVMIR.emitBlockStart defLabel
         LLVMIR.unreachable
-        pure (sconcat (NE.fromList resVals))
+        foldM resultCombine (head resVals) (tail resVals)
+        -- resultCombine pure (sconcat (NE.fromList resVals))
       Let name (valExpr, valM) (_, exprM) -> do
         val <- joinPoint1 valM
         let valTy = annGetAnn . unfix $ valExpr
@@ -291,7 +310,7 @@ arithToLLVM = para (go . annGetExpr)
         -- Assume codegen table is correct
         ptr <- gets (fromJust . Map.lookup name . tableVars)
         value <- LLVMIR.load ptr 0
-        resultValue value
+        pure $ resultValue value
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result
@@ -302,7 +321,7 @@ arithToLLVM = para (go . annGetExpr)
       let x' = NE.head xy
           y' = head (NE.tail xy)
       res <- op x' y'
-      resultValue res
+      pure $ resultValue res
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args
