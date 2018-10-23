@@ -311,15 +311,17 @@ arithToLLVM = para (go . annGetExpr)
         ptr <- gets (fromJust . Map.lookup name . tableVars)
         value <- LLVMIR.load ptr 0
         pure $ resultValue value
+      App name -> do
+        fn <- gets (fromJust . Map.lookup name . tableFuns)
+        resultValue <$> LLVMIR.call fn []
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result
           -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
           -> m Result
     binop x y op = do
-      xy <- joinPoint (liftM2 (\a b -> (a :| [b])) x y)
-      let x' = NE.head xy
-          y' = head (NE.tail xy)
+      x' <- joinPoint1 x
+      y' <- joinPoint1 y
       res <- op x' y'
       pure $ resultValue res
 
@@ -356,10 +358,16 @@ funToLLVM :: Text
            -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
 funToLLVM name ty body =
     let name' = if name == "main" then "__simpl_main" else name
-    in LLVMIR.function (llvmName name') [] (typeToLLVM ty) $ \_args -> do
+        ftype = typeToLLVM ty
+        fname = llvmName name'
+        foper = LLVM.ConstantOperand (LLVMC.GlobalReference
+                                      (LLVM.ptr $ LLVM.FunctionType ftype [] False) fname)
+    in LLVMIR.function fname [] ftype $ \_args -> do
          LLVMIR.ensureBlock
          endLabel <- LLVMIR.freshName "function_end"
-         modify (\t -> t { tableCurrentJoin = endLabel })
+         modify (\t -> t { tableCurrentJoin = endLabel
+                         , tableFuns = Map.insert name' foper (tableFuns t)
+                         })
          retval <- joinPoint1 (arithToLLVM body)
          LLVMIR.ret retval
 

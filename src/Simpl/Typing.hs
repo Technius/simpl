@@ -133,6 +133,10 @@ inferType = cata $ \case
     asks (symTabLookupVar name) >>= \case
       Just ty -> pure $ annotate (Var name) (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
+  App name ->
+    asks (symTabLookupFun name) >>= \case
+      Just (ty, _) -> pure $ annotate (App name) (typeToUtype ty)
+      Nothing -> throwError $ TyErrNoSuchVar name
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc

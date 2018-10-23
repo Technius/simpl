@@ -59,3 +59,6 @@ symTabLookupVar name = Map.lookup name . symTabVars
 
 symTabInsertVar :: Text -> Type -> SymbolTable e -> SymbolTable e
 symTabInsertVar name ty t = t { symTabVars = Map.insert name ty (symTabVars t) }
+
+symTabLookupFun :: Text -> SymbolTable e -> Maybe (Type, e)
+symTabLookupFun name = Map.lookup name . symTabFuns

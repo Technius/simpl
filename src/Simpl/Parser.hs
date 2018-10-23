@@ -58,9 +58,12 @@ literal = lexeme (bool <|> number)
 var :: Parser m Expr
 var = Ast.var <$> identifier
 
+appExpr :: Parser m Expr
+appExpr = Ast.appExpr <$> (C.string "@" >> identifier)
+
 -- | Non-recursive component of expression gramamr
 atom :: Parser m Expr
-atom = literal <|> var
+atom = appExpr <|> literal <|> var
 
 -- | Arithmetic expression parser
 arith :: Parser m Expr
