@@ -149,6 +149,7 @@ data TypeF a
   = TyDouble
   | TyBool
   | TyAdt Text
+  | TyFun [a] a
   deriving (Show, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
@@ -160,15 +161,29 @@ instance Unifiable TypeF where
   zipMatch TyDouble TyDouble = Just TyDouble
   zipMatch TyBool TyBool = Just TyBool
   zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
+  zipMatch (TyFun as1 r1) (TyFun as2 r2) =
+    if length as1 == length as2 then
+      Just $ TyFun (zipWith (curry Right) as1 as2) (Right (r1, r2))
+    else
+      Nothing
   zipMatch _ _ = Nothing
+
+isComplexType :: TypeF a -> Bool
+isComplexType = \case
+  TyFun _ _ -> True
+  _ -> False
 
 instance Pretty Type where
   pretty = para go
     where
+      wrapComplex (Fix t, ppr) =
+        if isComplexType t then parens ppr else ppr
       go :: TypeF (Type, Doc ann) -> Doc ann
       go TyDouble = "Double"
       go TyBool = "Bool"
       go (TyAdt n) = pretty n
+      go (TyFun args res) =
+        encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
 
 -- * Source File Types
 

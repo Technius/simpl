@@ -133,8 +133,17 @@ typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumC
 typeAdt :: Parser m Type
 typeAdt = Fix . Ast.TyAdt <$> typeIdentifier
 
+typeAtom :: Parser m Type
+typeAtom = typeLit <|> typeAdt
+
+typeFun :: Parser m Type
+typeFun = lexeme $ do
+  tys <- (typeAtom <|> parens type') `sepBy1` symbol "->"
+  pure . Fix $ Ast.TyFun (init tys) (last tys)
+
 type' :: Parser m Type
-type' = typeLit <|> typeAdt
+type' = typeAtom -- TODO: Figure out when to parse typeFun, esp. w/ respect to
+                 -- function declarations
 
 declFun :: Parser m (Decl Expr)
 declFun = lexeme $ do

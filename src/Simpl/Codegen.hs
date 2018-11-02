@@ -12,7 +12,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Simpl.Codegen where
 
-import Control.Monad (liftM2, forM, forM_, mapM_)
+import Control.Monad (forM, forM_, mapM_)
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Functor.Foldable (para, unfix)
@@ -335,6 +335,12 @@ typeToLLVM = go . unfix
       TyDouble -> LLVM.double
       TyBool -> LLVM.i1
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
+      TyFun args res ->
+        LLVM.FunctionType
+            { LLVM.resultType = typeToLLVM res
+            , LLVM.argumentTypes = typeToLLVM <$> args
+            , LLVM.isVarArg = False
+            }
 
 adtToLLVM :: Text
            -> [Constructor]

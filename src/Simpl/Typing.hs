@@ -179,3 +179,4 @@ typeToUtype = cata $ \case
   TyDouble -> UTerm TyDouble
   TyBool -> UTerm TyBool
   TyAdt n -> UTerm (TyAdt n)
+  TyFun args res -> UTerm (TyFun args res)
