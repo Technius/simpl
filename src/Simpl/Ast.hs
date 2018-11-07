@@ -194,14 +194,17 @@ instance Pretty Constructor where
   pretty (Ctor name args) = hsep (pretty name : (pretty <$> args))
 
 data Decl e
-  = DeclFun Text Type e -- ^ A function declaration, in order of name, type, expression
+  = DeclFun Text [(Text, Type)] Type e -- ^ A function declaration, in order of
+                                       -- name, type, params, expression
   | DeclAdt Text [Constructor] -- ^ An algebraic data type declaration
   deriving (Show, Functor)
 
 instance Pretty e => Pretty (Decl e) where
   pretty = \case
-    DeclFun name ty expr ->
-      hsep ["fun", pretty name, ":", pretty ty, "="] <> softline <> pretty expr
+    DeclFun name params ty expr ->
+      let params' = (\case (n, t) -> hsep [pretty n, ":", pretty t]) <$> params
+          paramList = if null params then [] else [encloseSep "(" ", " ")" params']
+      in hsep (["fun", pretty name] ++ paramList ++ [":", pretty ty, "="]) <> softline <> pretty expr
     DeclAdt name ctors ->
       hsep ["data", pretty name] <+> encloseSep "= " emptyDoc " | " (pretty <$> ctors)
 

@@ -135,7 +135,13 @@ inferType = cata $ \case
       Nothing -> throwError $ TyErrNoSuchVar name
   App name ->
     asks (symTabLookupFun name) >>= \case
-      Just (ty, _) -> pure $ annotate (App name) (typeToUtype ty)
+      -- TODO: Check parameter types
+      Just (params, ty, _) -> do
+        let numParams = length params
+        let paramCount = 0 -- TODO: Implement function argument application
+        when (numParams /= paramCount) $
+          throwError $ TyErrArgCount numParams paramCount (snd <$> params)
+        pure $ annotate (App name) (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
@@ -159,6 +165,9 @@ checkType ty expr = do
   typedExpr <- inferType expr
   _ <- unifyTy (annGetAnn . unfix $ typedExpr) (typeToUtype ty)
   tcExprToTypedExpr typedExpr
+
+withExtraVars :: [(Text, Type)] -> Typecheck TypedExpr -> Typecheck TypedExpr
+withExtraVars vars action = local (symTabInsertVars vars) action
 
 runTypecheck :: SymbolTable Expr -> Typecheck a -> Either TypeError a
 runTypecheck ctx

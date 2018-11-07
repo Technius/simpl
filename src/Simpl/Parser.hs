@@ -1,6 +1,7 @@
 {-# LANGuAGE OverloadedStrings #-}
 module Simpl.Parser where
 
+import Control.Applicative (liftA2)
 import Control.Monad.Combinators
 import Control.Monad.Combinators.Expr
 import Data.Functor.Foldable (Fix(Fix))
@@ -145,15 +146,22 @@ type' :: Parser m Type
 type' = typeAtom -- TODO: Figure out when to parse typeFun, esp. w/ respect to
                  -- function declarations
 
+declFunParamList :: Parser m [(Text, Type)]
+declFunParamList = lexeme $ option [] (parens params)
+  where
+    oneParam = liftA2 (,) (identifier <* symbol ":") type'
+    params = oneParam `sepBy1` symbol ","
+
 declFun :: Parser m (Decl Expr)
 declFun = lexeme $ do
   _ <- keyword "fun"
   name <- identifier
+  params <- declFunParamList
   _ <- symbol ":"
   ty <- type'
   _ <- symbol ":="
   body <- between (symbol "{") (symbol "}") expr
-  pure $ Ast.DeclFun name ty body
+  pure $ Ast.DeclFun name params ty body
 
 constructor :: Parser m Ast.Constructor
 constructor = lexeme $ do

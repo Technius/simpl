@@ -10,7 +10,7 @@ import qualified LLVM.AST as LLVM
 import Simpl.Analysis
 import Simpl.Ast
 import Simpl.Codegen (runCodegen)
-import Simpl.Typing (TypeError, runTypecheck, checkType)
+import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
 
 -- | Main error type, aggregating all error types.
 data CompilerErr
@@ -38,7 +38,7 @@ fullCompilerPipeline :: SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
 fullCompilerPipeline srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
     symTable <- get
-    let tycheckFuns (ty, expr) = (ty, checkType ty expr)
+    let tycheckFuns (params, ty, expr) = (params, ty, withExtraVars params (checkType ty expr))
     let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns symTable
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)

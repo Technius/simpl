@@ -336,7 +336,7 @@ typeToLLVM = go . unfix
       TyBool -> LLVM.i1
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
-        LLVM.FunctionType
+        LLVM.ptr $ LLVM.FunctionType
             { LLVM.resultType = typeToLLVM res
             , LLVM.argumentTypes = typeToLLVM <$> args
             , LLVM.isVarArg = False
@@ -359,27 +359,34 @@ adtToLLVM adtName ctors = do
     LLVMIR.typedef ctorLLVMName (Just ctorType)
 
 funToLLVM :: Text
+           -> [(Text, Type)]
            -> Type
            -> TypedExpr
            -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
-funToLLVM name ty body =
+funToLLVM name params ty body =
     let name' = if name == "main" then "__simpl_main" else name
         ftype = typeToLLVM ty
         fname = llvmName name'
         foper = LLVM.ConstantOperand (LLVMC.GlobalReference
                                       (LLVM.ptr $ LLVM.FunctionType ftype [] False) fname)
-    in LLVMIR.function fname [] ftype $ \_args -> do
+        fparams = [(LLVM.ptr $ typeToLLVM t, fromString (Text.unpack n)) | (n, t) <- params]
+    in LLVMIR.function fname fparams ftype $ \args -> do
          LLVMIR.ensureBlock
          endLabel <- LLVMIR.freshName "function_end"
+         -- We need to make sure we don't pollute other function scopes
+         oldVars <- gets tableVars
          modify (\t -> t { tableCurrentJoin = endLabel
                          , tableFuns = Map.insert name' foper (tableFuns t)
+                         , tableVars = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
                          })
          retval <- joinPoint1 (arithToLLVM body)
+         -- Restore old scope
+         modify (\t -> t { tableVars = oldVars })
          LLVMIR.ret retval
 
 initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
 initCodegenTable symTab = do
-  let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name , ty, ctors)
+  let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
   ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
     forM ([0..] `zip` ctors) $ \(i, Ctor ctorName _) ->
       pure (ctorName, (adtName, llvmName ctorName, i))
@@ -397,7 +404,7 @@ generateLLVM decls symTab = do
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
-  pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (ty, body)) -> funToLLVM name ty body)
+  pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (params, ty, body)) -> funToLLVM name params ty body)
   pure (Map.toList . symTabAdts $ symTab) >>= (mapM_ $ \(name, (_, ctors)) -> adtToLLVM name ctors)
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do

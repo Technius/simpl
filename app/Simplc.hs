@@ -37,7 +37,7 @@ codegen srcFile@(SourceFile _ decls) =
     _ -> putStrLn "No main function found" >> pure ()
   where
     isMain = \case
-      DeclFun n _ _ -> n == "main"
+      DeclFun n _ _ _ -> n == "main"
       _ -> False
 
 readSourceFile :: String -> IO (Maybe (SourceFile Expr))
