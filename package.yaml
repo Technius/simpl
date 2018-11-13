@@ -26,8 +26,8 @@ dependencies:
 - parser-combinators
 - recursion-schemes
 - deriving-compat
-- llvm-hs-pure >= 6.0.3 && < 7
-- llvm-hs >= 6.0.3 && < 7
+- llvm-hs-pure >= 7 && < 8
+- llvm-hs >= 7 && < 8
 - prettyprinter
 - unification-fd
 - mtl

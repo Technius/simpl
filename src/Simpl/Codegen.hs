@@ -404,8 +404,8 @@ generateLLVM decls symTab = do
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
-  pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (params, ty, body)) -> funToLLVM name params ty body)
   pure (Map.toList . symTabAdts $ symTab) >>= (mapM_ $ \(name, (_, ctors)) -> adtToLLVM name ctors)
+  pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (params, ty, body)) -> funToLLVM name params ty body)
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
     _ <- LLVMIR.call printf [(msg, [])]
