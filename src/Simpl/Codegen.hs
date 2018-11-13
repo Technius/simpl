@@ -288,9 +288,12 @@ arithToLLVM = para (go . annGetExpr)
           ctorPtrOffset <- LLVMIR.int32 0
           bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, ty)) -> do
             ctorPtrIndex <- LLVMIR.int32 i
-            -- Need to bitcast the ptr type because gep needs concrete types
+            -- Need to bitcast the ptr type because we need a concrete type. We
+            -- also need to load the data immediately because of how variables
+            -- are implemented.
             v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
                  >>= flip LLVMIR.bitcast (LLVM.ptr ty)
+                 >>= flip LLVMIR.load 0
             pure (n, v)
           let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
           res <- local updateTable expr >>= resultEnsureBranch
@@ -300,20 +303,17 @@ arithToLLVM = para (go . annGetExpr)
         LLVMIR.unreachable
         foldM resultCombine (head resVals) (tail resVals)
         -- resultCombine pure (sconcat (NE.fromList resVals))
-      Let name (valExpr, valM) (_, exprM) -> do
+      Let name (_, valM) (_, exprM) -> do
         val <- joinPoint1 valM
-        let valTy = annGetAnn . unfix $ valExpr
-        ptr <- LLVMIR.alloca (typeToLLVM valTy) Nothing 0
-        LLVMIR.store ptr 0 val
-        local (\t -> t { tableVars = Map.insert name ptr (tableVars t) }) exprM
+        local (\t -> t { tableVars = Map.insert name val (tableVars t) }) exprM
       Var name -> do
         -- Assume codegen table is correct
-        ptr <- gets (fromJust . Map.lookup name . tableVars)
-        value <- LLVMIR.load ptr 0
+        value <- gets (fromJust . Map.lookup name . tableVars)
         pure $ resultValue value
-      App name -> do
+      App name argsM -> do
+        args <- traverse joinPoint1 (snd <$> argsM)
         fn <- gets (fromJust . Map.lookup name . tableFuns)
-        resultValue <$> LLVMIR.call fn []
+        resultValue <$> LLVMIR.call fn ((, []) <$> args)
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result
@@ -350,7 +350,9 @@ adtToLLVM adtName ctors = do
         { LLVM.isPacked = True
         , LLVM.elementTypes = [LLVM.i32, LLVM.ptr LLVM.i8] }
   adtLLVMName <- gets ((\(n,_,_) -> n) . fromJust . Map.lookup adtName . tableAdts)
-  LLVMIR.typedef adtLLVMName (Just adtType)
+  -- TODO: Store returned type in symbol table to avoid error-prone type
+  -- reconstruction
+  _ <- LLVMIR.typedef adtLLVMName (Just adtType)
   forM_ ctors $ \(Ctor ctorName args) -> do
     let ctorType = LLVM.StructureType
           { LLVM.isPacked = True
@@ -367,22 +369,21 @@ funToLLVM name params ty body =
     let name' = if name == "main" then "__simpl_main" else name
         ftype = typeToLLVM ty
         fname = llvmName name'
-        foper = LLVM.ConstantOperand (LLVMC.GlobalReference
-                                      (LLVM.ptr $ LLVM.FunctionType ftype [] False) fname)
-        fparams = [(LLVM.ptr $ typeToLLVM t, fromString (Text.unpack n)) | (n, t) <- params]
-    in LLVMIR.function fname fparams ftype $ \args -> do
-         LLVMIR.ensureBlock
-         endLabel <- LLVMIR.freshName "function_end"
-         -- We need to make sure we don't pollute other function scopes
-         oldVars <- gets tableVars
-         modify (\t -> t { tableCurrentJoin = endLabel
-                         , tableFuns = Map.insert name' foper (tableFuns t)
-                         , tableVars = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
-                         })
-         retval <- joinPoint1 (arithToLLVM body)
-         -- Restore old scope
-         modify (\t -> t { tableVars = oldVars })
-         LLVMIR.ret retval
+        fparams = [(typeToLLVM t, fromString (Text.unpack n)) | (n, t) <- params]
+    in do foper <- LLVMIR.function fname fparams ftype $ \args -> do
+            LLVMIR.ensureBlock
+            endLabel <- LLVMIR.freshName "function_end"
+            -- We need to make sure we don't pollute other function scopes
+            oldVars <- gets tableVars
+            let updVars t = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
+            modify (\t -> t { tableCurrentJoin = endLabel
+                            , tableVars = updVars t })
+            retval <- joinPoint1 (arithToLLVM body)
+            -- Restore old scope
+            modify (\t -> t { tableVars = oldVars })
+            LLVMIR.ret retval
+          modify (\t -> t { tableFuns = Map.insert name foper (tableFuns t) })
+          pure foper
 
 initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
 initCodegenTable symTab = do

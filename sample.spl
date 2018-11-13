@@ -9,7 +9,7 @@ fun nested_ifs : Double := {
 fun main : Double := {
   case JustI 10.0 of
     JustI x => (if true then x else 1.0) * @asdf
-    Nothing => let res = 4.0 in res + 1.0
+    Nothing => let res = 4.0 in @double_me(res + 1.0)
 }
 
 fun asdf : Double := {

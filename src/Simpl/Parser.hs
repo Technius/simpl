@@ -60,7 +60,10 @@ var :: Parser m Expr
 var = Ast.var <$> identifier
 
 appExpr :: Parser m Expr
-appExpr = Ast.appExpr <$> (C.string "@" >> identifier)
+appExpr = do
+  fname <- C.string "@" >> identifier
+  args <- option [] (parens (expr `sepBy` symbol ","))
+  pure $ Ast.appExpr fname args
 
 -- | Non-recursive component of expression gramamr
 atom :: Parser m Expr

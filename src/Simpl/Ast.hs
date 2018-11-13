@@ -28,7 +28,7 @@ data ExprF a
   | Case [Branch a] !a -- ^ Case deconstruction
   | Let Text a a -- ^ Let expression
   | Var Text -- ^ Variable
-  | App Text -- ^ Function application
+  | App Text [a] -- ^ Function application
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -94,8 +94,8 @@ letExpr name val expr = Fix (Let name val expr)
 var :: Text -> Expr
 var = Fix . Var
 
-appExpr :: Text -> Expr
-appExpr = Fix . App
+appExpr :: Text -> [Expr] -> Expr
+appExpr name = Fix . App name
 
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
@@ -128,7 +128,7 @@ instance Pretty Expr where
       go (Let name (_, val) (_, expr)) =
         align $ hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
       go (Var name) = pretty name
-      go (App name) = "@" <> pretty name
+      go (App name args) = "@" <> pretty name <> encloseSep "(" ")" ", " (snd <$> args)
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)

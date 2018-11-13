@@ -6,7 +6,7 @@
 module Simpl.Typing where
 
 import Control.Applicative (liftA2)
-import Control.Monad (when, foldM, forM)
+import Control.Monad (when, foldM, forM, zipWithM)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
@@ -133,15 +133,19 @@ inferType = cata $ \case
     asks (symTabLookupVar name) >>= \case
       Just ty -> pure $ annotate (Var name) (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
-  App name ->
+  App name args ->
     asks (symTabLookupFun name) >>= \case
       -- TODO: Check parameter types
       Just (params, ty, _) -> do
         let numParams = length params
-        let paramCount = 0 -- TODO: Implement function argument application
+        let paramCount = length params
         when (numParams /= paramCount) $
           throwError $ TyErrArgCount numParams paramCount (snd <$> params)
-        pure $ annotate (App name) (typeToUtype ty)
+        argsTc <- sequence args
+        let unifyExprTy expr pTy =
+              annotate (annGetExpr (unfix expr)) <$> unifyTy (extractTy expr) pTy
+        params' <- zipWithM unifyExprTy argsTc (typeToUtype . snd <$> params)
+        pure $ annotate (App name params') (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
