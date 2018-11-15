@@ -30,6 +30,7 @@ import qualified Data.Text as Text
 import qualified Data.Map as Map
 import qualified LLVM.AST as LLVM
 import qualified LLVM.AST.Linkage as LLVM
+import qualified LLVM.AST.FloatingPointPredicate as LLVMFP
 import qualified LLVM.AST.Constant as LLVMC
 import qualified LLVM.AST.Global as LLVMG
 import qualified LLVM.AST.Type as LLVM
@@ -213,6 +214,9 @@ arithToLLVM = para (go . annGetExpr)
       Sub (_, x) (_, y) -> binop x y LLVMIR.fsub
       Mul (_, x) (_, y) -> binop x y LLVMIR.fmul
       Div (_, x) (_, y) -> binop x y LLVMIR.fdiv
+      Lt (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OLT)
+      Lte (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OLE)
+      Equal (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OEQ)
       If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
         LLVMIR.ensureBlock
         cond <- joinPoint1 condInstr

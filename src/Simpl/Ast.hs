@@ -23,6 +23,9 @@ data ExprF a
   | Sub !a !a -- ^ Subtract (doubles)
   | Mul !a !a -- ^ Multiply (doubles)
   | Div !a !a -- ^ Divide (doubles)
+  | Lt !a !a -- ^ Less than (doubles)
+  | Lte !a !a -- ^ Less than or equal to (doubles)
+  | Equal !a !a -- ^ Equality (doubles)
   | If !a !a !a -- ^ If expression
   | Cons !Text ![a] -- ^ Construct ADT
   | Case [Branch a] !a -- ^ Case deconstruction
@@ -76,6 +79,9 @@ mul a b = Fix (Mul a b)
 div :: Expr -> Expr -> Expr
 div a b = Fix (Div a b)
 
+lt :: Expr -> Expr -> Expr
+lt a b = Fix (Lt a b)
+
 ifExpr :: Expr -> Expr -> Expr -> Expr
 ifExpr cond t1 t2 = Fix (If cond t1 t2)
 
@@ -118,6 +124,9 @@ instance Pretty Expr where
       go (Sub p1 p2) = binop "-" p1 p2
       go (Mul p1 p2) = binop "*" p1 p2
       go (Div p1 p2) = binop "/" p1 p2
+      go (Lt p1 p2) = binop "<" p1 p2
+      go (Lte p1 p2) = binop "<=" p1 p2
+      go (Equal p1 p2) = binop "==" p1 p2
       go (If cond (_, t1) (_, t2)) =
         hsep ["if", wrapComplex cond, "then", t1, "else", t2]
       go (Cons name args) =

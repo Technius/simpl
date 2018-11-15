@@ -80,10 +80,13 @@ tcExprToTypedExpr =
 inferType :: Expr -> Typecheck TCExpr
 inferType = cata $ \case
   Lit l -> pure $ annotate (Lit l) (UTerm (literalType l))
-  Add x y -> doubleBinop Add x y
-  Sub x y -> doubleBinop Sub x y
-  Mul x y -> doubleBinop Mul x y
-  Div x y -> doubleBinop Div x y
+  Add x y -> doubleBinop Add (UTerm TyDouble) x y
+  Sub x y -> doubleBinop Sub (UTerm TyDouble) x y
+  Mul x y -> doubleBinop Mul (UTerm TyDouble) x y
+  Div x y -> doubleBinop Div (UTerm TyDouble) x y
+  Lt x y -> doubleBinop Lt (UTerm TyBool) x y
+  Lte x y -> doubleBinop Lte (UTerm TyBool) x y
+  Equal x y -> doubleBinop Equal (UTerm TyBool) x y
   If condM t1M t2M -> do
     cond <- condM
     _ <- unifyTy (extractTy cond) (UTerm TyBool)
@@ -155,14 +158,15 @@ inferType = cata $ \case
     extractTy = annGetAnn . unfix
 
     doubleBinop :: (TCExpr -> TCExpr -> ExprF TCExpr)
+                -> UType
                 -> Typecheck TCExpr
                 -> Typecheck TCExpr
                 -> Typecheck TCExpr
-    doubleBinop op xm ym = do
+    doubleBinop op resultTy xm ym = do
       (x, y) <- liftA2 (,) xm ym
       xTy <- unifyTy (extractTy x) (UTerm TyDouble)
-      yTy <- unifyTy (extractTy y) xTy
-      pure $ annotate (op x y) yTy
+      _ <- unifyTy (extractTy y) xTy
+      pure $ annotate (op x y) resultTy
 
 checkType :: Type -> Expr -> Typecheck TypedExpr
 checkType ty expr = do

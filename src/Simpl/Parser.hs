@@ -77,7 +77,10 @@ arith = makeExprParser (lexeme (parens expr) <|> atom) arithTable
       [ [ binary "*" Ast.mul
         , binary "/" Ast.div ]
       , [ binary "+" Ast.add
-        , binary "-" Ast.sub ] ]
+        , binary "-" Ast.sub ]
+      , [ binary "<" Ast.lt
+        , binary "<=" Ast.lt
+        , binary "==" Ast.lt ] ]
     binary name f = InfixL (f <$ symbol name)
 
 ifExpr :: Parser m Expr
