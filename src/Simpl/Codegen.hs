@@ -13,7 +13,7 @@
 {-# LANGUAGE RecursiveDo #-}
 module Simpl.Codegen where
 
-import Control.Monad (forM, forM_, mapM_)
+import Control.Monad (forM, forM_)
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Functor.Foldable (para, unfix)
@@ -366,6 +366,7 @@ adtToLLVM adtName ctors = do
     ctorLLVMName <- gets ((\(_,n,_) -> n) . fromJust . Map.lookup ctorName . tableCtors)
     LLVMIR.typedef ctorLLVMName (Just ctorType)
 
+-- | Emits the given function definition
 funToLLVM :: Text
            -> [(Text, Type)]
            -> Type
@@ -403,7 +404,7 @@ initCodegenTable symTab = do
 generateLLVM :: [Decl Expr]
              -> SymbolTable TypedExpr
              -> LLVMIR.ModuleBuilderT Codegen ()
-generateLLVM decls symTab = do
+generateLLVM decls symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
   (_, resultFmt) <- staticString ".resultformat" "Result: %.f\n"
@@ -411,10 +412,13 @@ generateLLVM decls symTab = do
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
-  pure (Map.toList . symTabAdts $ symTab) >>= (mapM_ $ \(name, (_, ctors)) -> adtToLLVM name ctors)
-  -- TODO: Determine how to make function definition order irrelevant, causing
-  --       some symbol table lookups to fail
-  pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (params, ty, body)) -> funToLLVM name params ty body)
+  forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
+    adtToLLVM name ctors
+  -- Insert function operands into symbol table before emitting so order of
+  -- definition doesn't matter. This works because the codegen monad is lazy.
+  modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })
+  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (params, ty, body)) ->
+    (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
     _ <- LLVMIR.call printf [(msg, [])]
