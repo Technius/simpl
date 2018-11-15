@@ -10,6 +10,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecursiveDo #-}
 module Simpl.Codegen where
 
 import Control.Monad (forM, forM_, mapM_)
@@ -65,7 +66,8 @@ newtype CodegenT m a =
   CodegenT { unCodegen :: StateT CodegenTable m a }
   deriving ( Functor
            , Applicative
-           , MonadState CodegenTable)
+           , MonadState CodegenTable
+           , MonadFix)
 
 type Codegen = CodegenT Identity
 
@@ -374,20 +376,20 @@ funToLLVM name params ty body =
         ftype = typeToLLVM ty
         fname = llvmName name'
         fparams = [(typeToLLVM t, fromString (Text.unpack n)) | (n, t) <- params]
-    in do foper <- LLVMIR.function fname fparams ftype $ \args -> do
-            LLVMIR.ensureBlock
-            endLabel <- LLVMIR.freshName "function_end"
-            -- We need to make sure we don't pollute other function scopes
-            oldVars <- gets tableVars
-            let updVars t = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
-            modify (\t -> t { tableCurrentJoin = endLabel
-                            , tableVars = updVars t })
-            retval <- joinPoint1 (arithToLLVM body)
-            -- Restore old scope
-            modify (\t -> t { tableVars = oldVars })
-            LLVMIR.ret retval
-          modify (\t -> t { tableFuns = Map.insert name foper (tableFuns t) })
-          pure foper
+    in mdo foper <- LLVMIR.function fname fparams ftype $ \args -> do
+             LLVMIR.ensureBlock
+             endLabel <- LLVMIR.freshName "function_end"
+             -- We need to make sure we don't pollute other function scopes
+             oldVars <- gets tableVars
+             let updVars t = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
+             modify (\t -> t { tableCurrentJoin = endLabel
+                             , tableFuns = Map.insert name foper (tableFuns t)
+                             , tableVars = updVars t })
+             retval <- joinPoint1 (arithToLLVM body)
+             -- Restore old scope
+             modify (\t -> t { tableVars = oldVars })
+             LLVMIR.ret retval
+           pure foper
 
 initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
 initCodegenTable symTab = do
@@ -410,6 +412,8 @@ generateLLVM decls symTab = do
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
   pure (Map.toList . symTabAdts $ symTab) >>= (mapM_ $ \(name, (_, ctors)) -> adtToLLVM name ctors)
+  -- TODO: Determine how to make function definition order irrelevant, causing
+  --       some symbol table lookups to fail
   pure (Map.toList . symTabFuns $ symTab) >>= (mapM_ $ \(name, (params, ty, body)) -> funToLLVM name params ty body)
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
