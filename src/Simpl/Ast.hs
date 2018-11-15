@@ -82,6 +82,12 @@ div a b = Fix (Div a b)
 lt :: Expr -> Expr -> Expr
 lt a b = Fix (Lt a b)
 
+lte :: Expr -> Expr -> Expr
+lte a b = Fix (Lte a b)
+
+eq :: Expr -> Expr -> Expr
+eq a b = Fix (Equal a b)
+
 ifExpr :: Expr -> Expr -> Expr -> Expr
 ifExpr cond t1 t2 = Fix (If cond t1 t2)
 
