@@ -59,6 +59,9 @@ literal = lexeme (bool <|> number)
 var :: Parser m Expr
 var = Ast.var <$> identifier
 
+funRef :: Parser m Expr
+funRef = Ast.funRef <$> (C.char '#' >> identifier)
+
 appExpr :: Parser m Expr
 appExpr = do
   fname <- C.string "@" >> identifier
@@ -67,7 +70,7 @@ appExpr = do
 
 -- | Non-recursive component of expression gramamr
 atom :: Parser m Expr
-atom = appExpr <|> literal <|> var
+atom = appExpr <|> funRef <|> literal <|> var
 
 -- | Arithmetic expression parser
 arith :: Parser m Expr
@@ -145,12 +148,13 @@ typeAtom = typeLit <|> typeAdt
 
 typeFun :: Parser m Type
 typeFun = lexeme $ do
-  tys <- (typeAtom <|> parens type') `sepBy1` symbol "->"
-  pure . Fix $ Ast.TyFun (init tys) (last tys)
+  first <- (parens type' <|> typeAtom)
+  _ <- symbol "->"
+  rest <- (parens type' <|> typeAtom) `sepBy1` symbol "->"
+  pure . Fix $ Ast.TyFun (first : init rest) (last rest)
 
 type' :: Parser m Type
-type' = typeAtom -- TODO: Figure out when to parse typeFun, esp. w/ respect to
-                 -- function declarations
+type' = try typeFun <|> typeAtom
 
 declFunParamList :: Parser m [(Text, Type)]
 declFunParamList = lexeme $ option [] (parens params)

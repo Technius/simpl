@@ -150,6 +150,12 @@ inferType = cata $ \case
         params' <- zipWithM unifyExprTy argsTc (typeToUtype . snd <$> params)
         pure $ annotate (App name params') (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
+  FunRef name ->
+    asks (symTabLookupFun name) >>= \case
+      Just (params, ty, _) ->
+        let paramTys = snd <$> params in
+          pure $ annotate (FunRef name) (typeToUtype (Fix $ TyFun paramTys ty))
+      Nothing -> throwError $ TyErrNoSuchVar name
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc

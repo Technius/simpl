@@ -320,6 +320,9 @@ arithToLLVM = para (go . annGetExpr)
         args <- traverse joinPoint1 (snd <$> argsM)
         fn <- gets (fromJust . Map.lookup name . tableFuns)
         resultValue <$> LLVMIR.call fn ((, []) <$> args)
+      FunRef name -> do
+        fn <- gets (fromJust . Map.lookup name . tableFuns)
+        pure (resultValue fn)
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result

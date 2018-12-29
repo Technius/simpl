@@ -32,6 +32,7 @@ data ExprF a
   | Let Text a a -- ^ Let expression
   | Var Text -- ^ Variable
   | App Text [a] -- ^ Function application
+  | FunRef Text -- ^ Function reference
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -109,6 +110,9 @@ var = Fix . Var
 appExpr :: Text -> [Expr] -> Expr
 appExpr name = Fix . App name
 
+funRef :: Text -> Expr
+funRef = Fix . FunRef
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitBool b) = pretty b
@@ -144,6 +148,7 @@ instance Pretty Expr where
         align $ hsep ["let", pretty name, "=", val, "in"] <> softline <> expr
       go (Var name) = pretty name
       go (App name args) = "@" <> pretty name <> encloseSep "(" ")" ", " (snd <$> args)
+      go (FunRef name) = "#" <> pretty name
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
