@@ -60,10 +60,10 @@ var :: Parser m Expr
 var = Ast.var <$> identifier
 
 funRef :: Parser m Expr
-funRef = Ast.funRef <$> (C.char '#' >> identifier)
+funRef = lexeme (Ast.funRef <$> (C.char '&' >> identifier))
 
 appExpr :: Parser m Expr
-appExpr = do
+appExpr = lexeme $ do
   fname <- C.string "@" >> identifier
   args <- option [] (parens (expr `sepBy` symbol ","))
   pure $ Ast.appExpr fname args
@@ -131,7 +131,7 @@ letExpr = lexeme $ do
   Ast.letExpr name val <$> expr
 
 expr :: Parser m Expr
-expr = try letExpr <|> try caseExpr <|> try ifExpr <|> try adtCons <|> arith
+expr = letExpr <|> caseExpr <|> ifExpr <|> try adtCons <|> arith
 
 typeLit :: Parser m Type
 typeLit = Fix <$> ((symbol "Double" >> pure Ast.TyDouble)
