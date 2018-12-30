@@ -54,4 +54,9 @@ fun lots_of_lets : Double := {
   y
 }
 
-fun fun_ptr : Double -> Double := { (#double_me) }
+fun fun_ptr : Double -> Double := { &double_me }
+
+fun fun_ptr_test (b : Bool) : Double := {
+  let f = if b then &double_me else &factorial in
+  @f(4.0)
+}

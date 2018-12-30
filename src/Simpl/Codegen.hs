@@ -13,6 +13,7 @@
 {-# LANGUAGE RecursiveDo #-}
 module Simpl.Codegen where
 
+import Control.Applicative ((<|>))
 import Control.Monad (forM, forM_)
 import Control.Monad.Reader
 import Control.Monad.State
@@ -318,7 +319,9 @@ arithToLLVM = para (go . annGetExpr)
         pure $ resultValue value
       App name argsM -> do
         args <- traverse joinPoint1 (snd <$> argsM)
-        fn <- gets (fromJust . Map.lookup name . tableFuns)
+        -- Assume that name is callable (e.g. either a static function or a
+        -- function pointer)
+        fn <- fromJust <$> lookupName name
         resultValue <$> LLVMIR.call fn ((, []) <$> args)
       FunRef name -> do
         fn <- gets (fromJust . Map.lookup name . tableFuns)
@@ -333,6 +336,12 @@ arithToLLVM = para (go . annGetExpr)
       y' <- joinPoint1 y
       res <- op x' y'
       pure $ resultValue res
+    lookupName :: MonadState CodegenTable m
+               => Text
+               -> m (Maybe LLVM.Operand)
+    lookupName name =
+      gets $ \t ->
+        Map.lookup name (tableVars t) <|> Map.lookup name (tableFuns t)
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args

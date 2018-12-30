@@ -136,20 +136,23 @@ inferType = cata $ \case
     asks (symTabLookupVar name) >>= \case
       Just ty -> pure $ annotate (Var name) (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
-  App name args ->
-    asks (symTabLookupFun name) >>= \case
-      -- TODO: Check parameter types
-      Just (params, ty, _) -> do
-        let numParams = length params
-        let paramCount = length params
-        when (numParams /= paramCount) $
-          throwError $ TyErrArgCount numParams paramCount (snd <$> params)
-        argsTc <- sequence args
-        let unifyExprTy expr pTy =
-              annotate (annGetExpr (unfix expr)) <$> unifyTy (extractTy expr) pTy
-        params' <- zipWithM unifyExprTy argsTc (typeToUtype . snd <$> params)
-        pure $ annotate (App name params') (typeToUtype ty)
-      Nothing -> throwError $ TyErrNoSuchVar name
+  App name args -> do
+    -- TODO: Improve error reporting here. If indirect call, then variable type
+    -- should be checked first (if invalid, infer function type and reject).
+    -- Then check as usual: check parameter count, then check parameter type.
+    argsTc <- sequence args
+    (params, ty) <- lookupFun name (extractTy <$> argsTc)
+    -- Check parameter count
+    let numParams = length params
+    let paramCount = length params
+    when (numParams /= paramCount) $
+      throwError $ TyErrArgCount numParams paramCount params
+    let unifyExprTy expr pTy =
+          annotate (annGetExpr (unfix expr)) <$> unifyTy (extractTy expr) pTy
+    -- Check parameter types
+    params' <- zipWithM unifyExprTy argsTc (typeToUtype <$> params)
+    -- Annotate with result type
+    pure $ annotate (App name params') (typeToUtype ty)
   FunRef name ->
     asks (symTabLookupFun name) >>= \case
       Just (params, ty, _) ->
@@ -173,6 +176,22 @@ inferType = cata $ \case
       xTy <- unifyTy (extractTy x) (UTerm TyDouble)
       _ <- unifyTy (extractTy y) xTy
       pure $ annotate (op x y) resultTy
+
+    lookupFun :: Text -> [UType] -> Typecheck ([Type], Type)
+    lookupFun name argTys =
+      asks (symTabLookupVar name) >>= \case
+        Just ty ->
+          case unfix ty of
+            TyFun params resTy -> pure (params, resTy)
+            _ -> do
+              resTy <- mkMetaVar
+              let got = fmap typeToUtype (unfix ty)
+                  expected = TyFun argTys resTy
+              throwError $ TyErrMismatch expected got
+        Nothing ->
+          asks (symTabLookupFun name) >>= \case
+            Just (params, resTy, _) -> pure (snd <$> params, resTy)
+            Nothing -> throwError (TyErrNoSuchVar name)
 
 checkType :: Type -> Expr -> Typecheck TypedExpr
 checkType ty expr = do
