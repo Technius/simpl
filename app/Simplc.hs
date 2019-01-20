@@ -4,8 +4,8 @@
 module Simplc where
 
 import qualified Data.ByteString as B
-import Control.Exception (displayException, SomeException)
-import Control.Exception.Safe (handle)
+
+import Control.Exception.Safe (catches, Handler(..))
 import Control.Monad (forM_)
 import Control.Monad.Except
 import Data.List (find)
@@ -17,6 +17,7 @@ import LLVM.Target (withHostTargetMachine)
 import LLVM.Module (File(File), withModuleFromAST, writeObjectToFile, moduleLLVMAssembly)
 import LLVM.Internal.Context
 import LLVM.Analysis (verify)
+import LLVM.Exception
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Text.Megaparsec (runParser, parseErrorPretty')
@@ -64,8 +65,11 @@ readSourceFile filepath = do
     Right ast -> pure ast
 
 handleExceptions :: EIO () -> EIO ()
-handleExceptions = handle $ \(e :: SomeException) ->
-  handler (displayException e)
+handleExceptions = flip catches $
+  [ Handler (\(EncodeException s) -> handler s)
+  , Handler (\(DecodeException s) -> handler s)
+  , Handler (\(LinkException s) -> handler s)
+  , Handler (\(VerifyException s) -> handler s) ]
   where
     handler :: String -> EIO ()
     handler err = throwError $ ["An error occurred:"] ++ lines err
