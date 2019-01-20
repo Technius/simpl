@@ -33,6 +33,7 @@ dependencies:
 - mtl
 - containers
 - bytestring
+- optparse-applicative
 
 library:
   source-dirs: src

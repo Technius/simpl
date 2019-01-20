@@ -9,6 +9,7 @@ import Control.Monad (forM_)
 import Data.List (find)
 import Simpl.Ast
 import Simpl.Compiler
+import qualified Simpl.Cli as Cli
 import qualified Simpl.Parser as Parser
 import LLVM.Target (withHostTargetMachine)
 import LLVM.Module (File(File), withModuleFromAST, writeObjectToFile, moduleLLVMAssembly)
@@ -20,7 +21,8 @@ import Text.Megaparsec (runParser, parseErrorPretty')
 
 main :: IO ()
 main = do
-  progAstRes <- readSourceFile "sample.spl"
+  options <- Cli.runCliParser
+  progAstRes <- readSourceFile (Cli.fileName options)
   case progAstRes of
     Just ast -> codegen ast
     Nothing -> pure ()
