@@ -18,7 +18,7 @@ targetReader = maybeReader $ \case
   _ -> Nothing
 
 cliProgram :: ParserInfo CliCmd
-cliProgram = info compileCommand mempty
+cliProgram = info (helper <*> compileCommand) mempty
 
 compileCommand :: Parser CliCmd
 compileCommand = Compile <$>
