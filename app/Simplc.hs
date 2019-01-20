@@ -4,8 +4,10 @@
 module Simplc where
 
 import qualified Data.ByteString as B
-import Control.Exception
+import Control.Exception (displayException, SomeException)
+import Control.Exception.Safe (handle)
 import Control.Monad (forM_)
+import Control.Monad.Except
 import Data.List (find)
 import Simpl.Ast
 import Simpl.Compiler
@@ -18,46 +20,57 @@ import LLVM.Analysis (verify)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Text.Megaparsec (runParser, parseErrorPretty')
+import System.Exit (exitFailure)
+
+-- | Error monad
+type EIO a = ExceptT [String] IO a
 
 main :: IO ()
 main = do
   options <- Cli.runCliParser
-  progAstRes <- readSourceFile (Cli.fileName options)
-  case progAstRes of
-    Just ast -> codegen ast
-    Nothing -> pure ()
+  appRes <- runExceptT (appLogic options)
+  case appRes of
+    Left errLines -> do
+      forM_ errLines putStrLn
+      exitFailure
+    Right _ -> pure ()
 
-codegen :: SourceFile Expr -> IO ()
+appLogic :: Cli.CliCmd -> EIO ()
+appLogic options = do
+  ast <- readSourceFile (Cli.fileName options)
+  codegen ast
+
+codegen :: SourceFile Expr -> EIO ()
 codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
     Just _ -> do
-      putStrLn "Running compiler pipeline"
-      modRes <- fullCompilerPipeline srcFile
-      case modRes of
-        Left err -> putStrLn $ "Error: " ++ show err
-        Right llvmMod -> outputModule llvmMod
-    _ -> putStrLn "No main function found" >> pure ()
+      liftIO $ putStrLn "Running compiler pipeline"
+      let pipeline = ExceptT (fullCompilerPipeline srcFile)
+      llvmMod <- withExceptT (pure . ("Error: " ++) . show) pipeline
+      outputModule llvmMod
+    _ -> throwError $ ["No main function found"]
   where
     isMain = \case
       DeclFun n _ _ _ -> n == "main"
       _ -> False
 
-readSourceFile :: String -> IO (Maybe (SourceFile Expr))
+readSourceFile :: String -> EIO (SourceFile Expr)
 readSourceFile filepath = do
-  sourceContents <- TextIO.readFile filepath
+  sourceContents <- liftIO $ TextIO.readFile filepath
   let res = runParser (Parser.sourceFile (Text.pack filepath)) filepath sourceContents
   case res of
-    Left err -> do
-      putStrLn $ parseErrorPretty' sourceContents err
-      pure Nothing
-    Right ast -> pure (Just ast)
+    Left err ->
+      throwError $ pure (parseErrorPretty' sourceContents err)
+    Right ast -> pure ast
 
-handleErrors :: IO () -> IO ()
-handleErrors action = catch action $ \(e :: SomeException) -> do
-  putStrLn "An error occured: "
-  forM_ (lines (displayException e)) putStrLn
+handleExceptions :: EIO () -> EIO ()
+handleExceptions = handle $ \(e :: SomeException) ->
+  handler (displayException e)
+  where
+    handler :: String -> EIO ()
+    handler err = throwError $ ["An error occurred:"] ++ lines err
 
-outputModule llvmMod =
+outputModule llvmMod = handleExceptions . liftIO $
   withHostTargetMachine $ \target ->
     withContext $ \ctx ->
       withModuleFromAST ctx llvmMod $ \mod' -> do

@@ -3,8 +3,8 @@
 {-# LANGUAGE TupleSections #-}
 module Simpl.Compiler where
 import Control.Monad.Except
-
 import Control.Monad.State
+
 import qualified LLVM.AST as LLVM
 
 import Simpl.Analysis
