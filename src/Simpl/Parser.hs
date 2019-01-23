@@ -30,6 +30,9 @@ symbol = L.symbol whitespace
 parens :: Parser m a -> Parser m a
 parens = between (C.char '(') (C.char ')')
 
+signed :: Num a => Parser m a -> Parser m a
+signed = L.signed whitespace
+
 reservedKeywords :: [Text]
 reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in"]
 
@@ -52,9 +55,9 @@ literal :: Parser m Expr
 literal = lexeme (bool <|> number)
   where
     bool = Ast.litBool <$> ((symbol "true" >> pure True) <|> (symbol "false" >> pure False))
-    number = Ast.litDouble <$> (try (signed L.float) <|> decimal)
-    signed = L.signed whitespace
-    decimal = signed (fromIntegral <$> (L.decimal :: Parser m Int))
+    number = try double <|> integer
+    double = Ast.litDouble <$> signed L.float
+    integer = Ast.litInt <$> signed L.decimal
 
 var :: Parser m Expr
 var = Ast.var <$> identifier
@@ -134,7 +137,8 @@ expr :: Parser m Expr
 expr = letExpr <|> caseExpr <|> ifExpr <|> try adtCons <|> arith
 
 typeLit :: Parser m Type
-typeLit = Fix <$> ((symbol "Double" >> pure Ast.TyDouble)
+typeLit = Fix <$> ((symbol "Double" >> pure (Ast.TyNumber Ast.NumDouble))
+          <|> (symbol "Int" >> pure (Ast.TyNumber Ast.NumInt))
           <|> (symbol "Bool" >> pure Ast.TyBool))
 
 typeIdentifier :: Parser m Text

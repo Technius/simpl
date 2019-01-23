@@ -63,7 +63,8 @@ forceBindings v = Typecheck . lift $ applyBindings v
 literalType :: Literal -> TypeF a
 literalType = \case
   LitBool _ -> TyBool
-  LitDouble _ -> TyDouble
+  LitDouble _ -> TyNumber NumDouble
+  LitInt _ -> TyNumber NumInt
 
 -- | Annotate every AST node with a unification meta variable
 attachExprMetaVar :: Expr -> Typecheck TCExpr
@@ -80,10 +81,10 @@ tcExprToTypedExpr =
 inferType :: Expr -> Typecheck TCExpr
 inferType = cata $ \case
   Lit l -> pure $ annotate (Lit l) (UTerm (literalType l))
-  Add x y -> doubleBinop Add (UTerm TyDouble) x y
-  Sub x y -> doubleBinop Sub (UTerm TyDouble) x y
-  Mul x y -> doubleBinop Mul (UTerm TyDouble) x y
-  Div x y -> doubleBinop Div (UTerm TyDouble) x y
+  Add x y -> doubleBinop Add (UTerm (TyNumber NumUnknown)) x y
+  Sub x y -> doubleBinop Sub (UTerm (TyNumber NumUnknown)) x y
+  Mul x y -> doubleBinop Mul (UTerm (TyNumber NumUnknown)) x y
+  Div x y -> doubleBinop Div (UTerm (TyNumber NumUnknown)) x y
   Lt x y -> doubleBinop Lt (UTerm TyBool) x y
   Lte x y -> doubleBinop Lte (UTerm TyBool) x y
   Equal x y -> doubleBinop Equal (UTerm TyBool) x y
@@ -173,7 +174,7 @@ inferType = cata $ \case
                 -> Typecheck TCExpr
     doubleBinop op resultTy xm ym = do
       (x, y) <- liftA2 (,) xm ym
-      xTy <- unifyTy (extractTy x) (UTerm TyDouble)
+      xTy <- unifyTy (extractTy x) (UTerm (TyNumber NumUnknown))
       _ <- unifyTy (extractTy y) xTy
       pure $ annotate (op x y) resultTy
 
@@ -218,7 +219,7 @@ utypeToType ut = case ut of
 -- | Direct conversion of a [Type] to a [UType]. Does not instantiate variables.
 typeToUtype :: Type -> UType
 typeToUtype = cata $ \case
-  TyDouble -> UTerm TyDouble
+  TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
   TyAdt n -> UTerm (TyAdt n)
   TyFun args res -> UTerm (TyFun args res)

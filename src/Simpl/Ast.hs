@@ -37,6 +37,7 @@ data ExprF a
 
 data Literal
   = LitDouble Double
+  | LitInt Int
   | LitBool Bool
   deriving (Eq, Show)
 
@@ -58,12 +59,16 @@ isComplexExpr (Fix e) = case e of
   Lit l ->
     case l of
       LitDouble d -> d < 0
+      LitInt x -> x < 0
       _ -> False
   Var _ -> False
   _ -> True
 
 litDouble :: Double -> Expr
 litDouble = Fix . Lit . LitDouble
+
+litInt :: Int -> Expr
+litInt = Fix . Lit . LitInt
 
 litBool :: Bool -> Expr
 litBool = Fix . Lit . LitBool
@@ -115,6 +120,7 @@ funRef = Fix . FunRef
 
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
+  pretty (LitInt x) = pretty x
   pretty (LitBool b) = pretty b
 
 instance Pretty a => Pretty (Branch a) where
@@ -165,8 +171,17 @@ cataM f = (>>= f) . mapM (cataM f) . project
 
 -- * Type System
 
+data Numeric = NumDouble | NumInt | NumUnknown
+  deriving (Show, Eq)
+
+instance Pretty Numeric where
+  pretty = \case
+    NumDouble -> "Double"
+    NumInt -> "Int"
+    NumUnknown -> "Num"
+
 data TypeF a
-  = TyDouble
+  = TyNumber Numeric
   | TyBool
   | TyAdt Text
   | TyFun [a] a
@@ -178,7 +193,10 @@ $(deriveShow1 ''TypeF)
 $(deriveEq1 ''TypeF)
 
 instance Unifiable TypeF where
-  zipMatch TyDouble TyDouble = Just TyDouble
+  zipMatch (TyNumber n) (TyNumber m) = case (n, m) of
+    (NumUnknown, _) -> Just (TyNumber m)
+    (_, NumUnknown) -> Just (TyNumber n)
+    _ -> if n == m then Just (TyNumber n) else Nothing
   zipMatch TyBool TyBool = Just TyBool
   zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
@@ -199,7 +217,7 @@ instance Pretty Type where
       wrapComplex (Fix t, ppr) =
         if isComplexType t then parens ppr else ppr
       go :: TypeF (Type, Doc ann) -> Doc ann
-      go TyDouble = "Double"
+      go (TyNumber n) = pretty n
       go TyBool = "Bool"
       go (TyAdt n) = pretty n
       go (TyFun args res) =

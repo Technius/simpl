@@ -203,6 +203,7 @@ mallocRef = LLVM.ConstantOperand $
 
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
+  LitInt x -> resultValue <$> LLVMIR.int64 (fromIntegral x)
   LitDouble x -> resultValue <$> LLVMIR.double x
   LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
 
@@ -350,7 +351,10 @@ typeToLLVM :: Type -> LLVM.Type
 typeToLLVM = go . unfix
   where
     go = \case
-      TyDouble -> LLVM.double
+      TyNumber n -> case n of
+        NumDouble -> LLVM.double
+        NumInt -> LLVM.i64
+        NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
