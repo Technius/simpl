@@ -328,6 +328,12 @@ arithToLLVM = para (go . annGetExpr)
       FunRef name -> do
         fn <- gets (fromJust . Map.lookup name . tableFuns)
         pure (resultValue fn)
+      Cast (origExpr, exprM) num -> do
+        let origNum = case unfix (annGetAnn (unfix origExpr)) of
+              TyNumber n -> n
+              _ -> error "codegen: attempting to cast non-numeric"
+        expr <- joinPoint1 exprM
+        resultValue <$> castOp origNum num expr
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result
@@ -342,8 +348,8 @@ arithToLLVM = para (go . annGetExpr)
           => m Result
           -> m Result
           -> Type
-          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
-          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
+          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Float operation
+          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Integer operation
           -> m Result
     numBinop x y ty opDouble opInt =
       case unfix ty of
@@ -357,6 +363,14 @@ arithToLLVM = para (go . annGetExpr)
     lookupName name =
       gets $ \t ->
         Map.lookup name (tableVars t) <|> Map.lookup name (tableFuns t)
+    castOp :: LLVMIR.MonadIRBuilder m => Numeric -> Numeric -> LLVM.Operand -> m LLVM.Operand
+    castOp source castTo oper = case (source, castTo) of
+      (NumDouble, NumDouble) -> pure oper
+      (NumInt, NumInt) -> pure oper
+      (NumDouble, NumInt) -> LLVMIR.fptosi oper LLVM.i64
+      (NumInt, NumDouble) -> LLVMIR.sitofp oper LLVM.double
+      (NumUnknown, _) -> castOp NumDouble castTo oper
+      (_, NumUnknown) -> error "castOp: attempting to cast to NumUnknown"
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args

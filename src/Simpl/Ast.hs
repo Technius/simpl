@@ -15,6 +15,15 @@ import Data.Text.Prettyprint.Doc
 import Text.Show.Deriving (deriveShow1)
 import Data.Eq.Deriving (deriveEq1)
 
+data Numeric = NumDouble | NumInt | NumUnknown
+  deriving (Show, Eq)
+
+instance Pretty Numeric where
+  pretty = \case
+    NumDouble -> "Double"
+    NumInt -> "Int"
+    NumUnknown -> "Num"
+
 -- * AST Type
 
 data ExprF a
@@ -33,6 +42,7 @@ data ExprF a
   | Var Text -- ^ Variable
   | App Text [a] -- ^ Function application
   | FunRef Text -- ^ Function reference
+  | Cast !a !Numeric
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -109,6 +119,9 @@ caseExpr branches val = Fix (Case branches val)
 letExpr :: Text -> Expr -> Expr -> Expr
 letExpr name val expr = Fix (Let name val expr)
 
+castExpr :: Expr -> Numeric -> Expr
+castExpr expr num = Fix (Cast expr num)
+
 var :: Text -> Expr
 var = Fix . Var
 
@@ -155,6 +168,7 @@ instance Pretty Expr where
       go (Var name) = pretty name
       go (App name args) = "@" <> pretty name <> encloseSep "(" ")" ", " (snd <$> args)
       go (FunRef name) = "#" <> pretty name
+      go (Cast e n) = hsep [wrapComplex e, "as", pretty n]
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
@@ -170,15 +184,6 @@ cataM :: (Monad m, Traversable f) => (f a -> m a) -> Fix f -> m a
 cataM f = (>>= f) . mapM (cataM f) . project
 
 -- * Type System
-
-data Numeric = NumDouble | NumInt | NumUnknown
-  deriving (Show, Eq)
-
-instance Pretty Numeric where
-  pretty = \case
-    NumDouble -> "Double"
-    NumInt -> "Int"
-    NumUnknown -> "Num"
 
 data TypeF a
   = TyNumber Numeric

@@ -60,3 +60,11 @@ fun fun_ptr_test (b : Bool) : Int := {
   let f = if b then &double_me else &factorial in
   @f(4)
 }
+
+fun cast_test_1 : Int := {
+  (1 + 1) * (cast 2.0 as Int)
+}
+
+fun cast_test_2 : Int := {
+  (1 * 1) + (cast 2.0 as Int)
+}

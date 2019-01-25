@@ -34,7 +34,7 @@ signed :: Num a => Parser m a -> Parser m a
 signed = L.signed whitespace
 
 reservedKeywords :: [Text]
-reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in"]
+reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as"]
 
 keyword :: Text -> Parser m Text
 keyword k = lexeme (C.string k <* notFollowedBy C.alphaNumChar)
@@ -133,13 +133,22 @@ letExpr = lexeme $ do
   _ <- symbol "in"
   Ast.letExpr name val <$> expr
 
+castExpr :: Parser m Expr
+castExpr = lexeme $ do
+  _ <- symbol "cast"
+  e <- expr
+  _ <- symbol "as"
+  n <- numeric
+  pure $ Ast.castExpr e n
+
 expr :: Parser m Expr
-expr = letExpr <|> caseExpr <|> ifExpr <|> try adtCons <|> arith
+expr = letExpr <|> caseExpr <|> ifExpr <|> castExpr <|> try adtCons <|> arith
+
+numeric :: Parser m Ast.Numeric
+numeric = (symbol "Double" >> pure Ast.NumDouble) <|> (symbol "Int" >> pure Ast.NumInt)
 
 typeLit :: Parser m Type
-typeLit = Fix <$> ((symbol "Double" >> pure (Ast.TyNumber Ast.NumDouble))
-          <|> (symbol "Int" >> pure (Ast.TyNumber Ast.NumInt))
-          <|> (symbol "Bool" >> pure Ast.TyBool))
+typeLit = Fix <$> ((Ast.TyNumber <$> numeric) <|> (symbol "Bool" >> pure Ast.TyBool))
 
 typeIdentifier :: Parser m Text
 typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumChar))
