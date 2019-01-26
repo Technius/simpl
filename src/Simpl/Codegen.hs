@@ -33,6 +33,7 @@ import qualified Data.Map as Map
 import qualified LLVM.AST as LLVM
 import qualified LLVM.AST.Linkage as LLVM
 import qualified LLVM.AST.FloatingPointPredicate as LLVMFP
+import qualified LLVM.AST.IntegerPredicate as LLVMIP
 import qualified LLVM.AST.Constant as LLVMC
 import qualified LLVM.AST.Global as LLVMG
 import qualified LLVM.AST.Type as LLVM
@@ -203,6 +204,7 @@ mallocRef = LLVM.ConstantOperand $
 
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
+  LitInt x -> resultValue <$> LLVMIR.int64 (fromIntegral x)
   LitDouble x -> resultValue <$> LLVMIR.double x
   LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
 
@@ -213,13 +215,13 @@ arithToLLVM = para (go . annGetExpr)
        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
     go = \case
       Lit l -> literalToLLVM l
-      Add (_, x) (_, y) -> binop x y LLVMIR.fadd
-      Sub (_, x) (_, y) -> binop x y LLVMIR.fsub
-      Mul (_, x) (_, y) -> binop x y LLVMIR.fmul
-      Div (_, x) (_, y) -> binop x y LLVMIR.fdiv
-      Lt (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OLT)
-      Lte (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OLE)
-      Equal (_, x) (_, y) -> binop x y (LLVMIR.fcmp LLVMFP.OEQ)
+      Add (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fadd LLVMIR.add
+      Sub (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fsub LLVMIR.sub
+      Mul (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fmul LLVMIR.mul
+      Div (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fdiv LLVMIR.sdiv
+      Lt (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OLT) (LLVMIR.icmp LLVMIP.SLT)
+      Lte (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OLE) (LLVMIR.icmp LLVMIP.SLE)
+      Equal (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OEQ) (LLVMIR.icmp LLVMIP.EQ)
       If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
         LLVMIR.ensureBlock
         cond <- joinPoint1 condInstr
@@ -326,6 +328,12 @@ arithToLLVM = para (go . annGetExpr)
       FunRef name -> do
         fn <- gets (fromJust . Map.lookup name . tableFuns)
         pure (resultValue fn)
+      Cast (origExpr, exprM) num -> do
+        let origNum = case unfix (annGetAnn (unfix origExpr)) of
+              TyNumber n -> n
+              _ -> error "codegen: attempting to cast non-numeric"
+        expr <- joinPoint1 exprM
+        resultValue <$> castOp origNum num expr
     binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
           => m Result
           -> m Result
@@ -336,12 +344,33 @@ arithToLLVM = para (go . annGetExpr)
       y' <- joinPoint1 y
       res <- op x' y'
       pure $ resultValue res
+    numBinop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+          => m Result
+          -> m Result
+          -> Type
+          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Float operation
+          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Integer operation
+          -> m Result
+    numBinop x y ty opDouble opInt =
+      case unfix ty of
+        TyNumber numTy ->
+          if numTy == NumInt then binop x y opInt
+                             else binop x y opDouble
+        _ -> error "Invariant violated"
     lookupName :: MonadState CodegenTable m
                => Text
                -> m (Maybe LLVM.Operand)
     lookupName name =
       gets $ \t ->
         Map.lookup name (tableVars t) <|> Map.lookup name (tableFuns t)
+    castOp :: LLVMIR.MonadIRBuilder m => Numeric -> Numeric -> LLVM.Operand -> m LLVM.Operand
+    castOp source castTo oper = case (source, castTo) of
+      (NumDouble, NumDouble) -> pure oper
+      (NumInt, NumInt) -> pure oper
+      (NumDouble, NumInt) -> LLVMIR.fptosi oper LLVM.i64
+      (NumInt, NumDouble) -> LLVMIR.sitofp oper LLVM.double
+      (NumUnknown, _) -> castOp NumDouble castTo oper
+      (_, NumUnknown) -> error "castOp: attempting to cast to NumUnknown"
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args
@@ -350,7 +379,10 @@ typeToLLVM :: Type -> LLVM.Type
 typeToLLVM = go . unfix
   where
     go = \case
-      TyDouble -> LLVM.double
+      TyNumber n -> case n of
+        NumDouble -> LLVM.double
+        NumInt -> LLVM.i64
+        NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
@@ -419,7 +451,7 @@ generateLLVM :: [Decl Expr]
 generateLLVM decls symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
-  (_, resultFmt) <- staticString ".resultformat" "Result: %.f\n"
+  (_, resultFmt) <- staticString ".resultformat" "Result: %.i\n"
   let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   printf <- llvmPrintf
@@ -434,7 +466,7 @@ generateLLVM decls symTab = mdo
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
     _ <- LLVMIR.call printf [(msg, [])]
-    let mainTy = LLVM.ptr (LLVM.FunctionType LLVM.double [] False)
+    let mainTy = LLVM.ptr (LLVM.FunctionType LLVM.i64 [] False)
     let mainName = LLVM.mkName "__simpl_main"
     let mainRef = LLVM.ConstantOperand (LLVMC.GlobalReference mainTy mainName)
     exprResult <- LLVMIR.call mainRef []

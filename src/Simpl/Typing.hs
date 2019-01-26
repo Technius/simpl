@@ -63,7 +63,8 @@ forceBindings v = Typecheck . lift $ applyBindings v
 literalType :: Literal -> TypeF a
 literalType = \case
   LitBool _ -> TyBool
-  LitDouble _ -> TyDouble
+  LitDouble _ -> TyNumber NumDouble
+  LitInt _ -> TyNumber NumInt
 
 -- | Annotate every AST node with a unification meta variable
 attachExprMetaVar :: Expr -> Typecheck TCExpr
@@ -80,13 +81,13 @@ tcExprToTypedExpr =
 inferType :: Expr -> Typecheck TCExpr
 inferType = cata $ \case
   Lit l -> pure $ annotate (Lit l) (UTerm (literalType l))
-  Add x y -> doubleBinop Add (UTerm TyDouble) x y
-  Sub x y -> doubleBinop Sub (UTerm TyDouble) x y
-  Mul x y -> doubleBinop Mul (UTerm TyDouble) x y
-  Div x y -> doubleBinop Div (UTerm TyDouble) x y
-  Lt x y -> doubleBinop Lt (UTerm TyBool) x y
-  Lte x y -> doubleBinop Lte (UTerm TyBool) x y
-  Equal x y -> doubleBinop Equal (UTerm TyBool) x y
+  Add x y -> doubleBinop Add (UTerm (TyNumber NumUnknown)) True x y
+  Sub x y -> doubleBinop Sub (UTerm (TyNumber NumUnknown)) True x y
+  Mul x y -> doubleBinop Mul (UTerm (TyNumber NumUnknown)) True x y
+  Div x y -> doubleBinop Div (UTerm (TyNumber NumUnknown)) True x y
+  Lt x y -> doubleBinop Lt (UTerm TyBool) False x y
+  Lte x y -> doubleBinop Lte (UTerm TyBool) False x y
+  Equal x y -> doubleBinop Equal (UTerm TyBool) False x y
   If condM t1M t2M -> do
     cond <- condM
     _ <- unifyTy (extractTy cond) (UTerm TyBool)
@@ -159,6 +160,12 @@ inferType = cata $ \case
         let paramTys = snd <$> params in
           pure $ annotate (FunRef name) (typeToUtype (Fix $ TyFun paramTys ty))
       Nothing -> throwError $ TyErrNoSuchVar name
+  Cast exprM num -> do
+    expr <- exprM
+    let ty = extractTy expr
+    ty' <- unifyTy ty (UTerm (TyNumber NumUnknown))
+    let expr' = annotate (annGetExpr . unfix $ expr) ty'
+    pure $ annotate (Cast expr' num) (UTerm (TyNumber num))
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc
@@ -167,15 +174,17 @@ inferType = cata $ \case
     extractTy = annGetAnn . unfix
 
     doubleBinop :: (TCExpr -> TCExpr -> ExprF TCExpr)
-                -> UType
+                -> UType -- ^ Result type
+                -> Bool -- ^ Whether result type should be unified with arguments
                 -> Typecheck TCExpr
                 -> Typecheck TCExpr
                 -> Typecheck TCExpr
-    doubleBinop op resultTy xm ym = do
+    doubleBinop op resultTy unifyArgResult xm ym = do
       (x, y) <- liftA2 (,) xm ym
-      xTy <- unifyTy (extractTy x) (UTerm TyDouble)
-      _ <- unifyTy (extractTy y) xTy
-      pure $ annotate (op x y) resultTy
+      xTy <- unifyTy (extractTy x) (UTerm (TyNumber NumUnknown))
+      yTy <- unifyTy (extractTy y) xTy
+      rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
+      pure $ annotate (op x y) rTy
 
     lookupFun :: Text -> [UType] -> Typecheck ([Type], Type)
     lookupFun name argTys =
@@ -218,7 +227,14 @@ utypeToType ut = case ut of
 -- | Direct conversion of a [Type] to a [UType]. Does not instantiate variables.
 typeToUtype :: Type -> UType
 typeToUtype = cata $ \case
-  TyDouble -> UTerm TyDouble
+  TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
   TyAdt n -> UTerm (TyAdt n)
   TyFun args res -> UTerm (TyFun args res)
+
+-- | Get type of an expression, assuming no free variables. Used for debugging.
+getTypeOf :: Expr -> Either TypeError Type
+getTypeOf expr =
+  let table = buildSymbolTable (SourceFile "" [])
+      tcAction = inferType expr >>= tcExprToTypedExpr in
+  runTypecheck table (annGetAnn . unfix <$> tcAction)

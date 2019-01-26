@@ -15,6 +15,15 @@ import Data.Text.Prettyprint.Doc
 import Text.Show.Deriving (deriveShow1)
 import Data.Eq.Deriving (deriveEq1)
 
+data Numeric = NumDouble | NumInt | NumUnknown
+  deriving (Show, Eq)
+
+instance Pretty Numeric where
+  pretty = \case
+    NumDouble -> "Double"
+    NumInt -> "Int"
+    NumUnknown -> "Num"
+
 -- * AST Type
 
 data ExprF a
@@ -33,10 +42,12 @@ data ExprF a
   | Var Text -- ^ Variable
   | App Text [a] -- ^ Function application
   | FunRef Text -- ^ Function reference
+  | Cast !a !Numeric
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
   = LitDouble Double
+  | LitInt Int
   | LitBool Bool
   deriving (Eq, Show)
 
@@ -58,12 +69,16 @@ isComplexExpr (Fix e) = case e of
   Lit l ->
     case l of
       LitDouble d -> d < 0
+      LitInt x -> x < 0
       _ -> False
   Var _ -> False
   _ -> True
 
 litDouble :: Double -> Expr
 litDouble = Fix . Lit . LitDouble
+
+litInt :: Int -> Expr
+litInt = Fix . Lit . LitInt
 
 litBool :: Bool -> Expr
 litBool = Fix . Lit . LitBool
@@ -104,6 +119,9 @@ caseExpr branches val = Fix (Case branches val)
 letExpr :: Text -> Expr -> Expr -> Expr
 letExpr name val expr = Fix (Let name val expr)
 
+castExpr :: Expr -> Numeric -> Expr
+castExpr expr num = Fix (Cast expr num)
+
 var :: Text -> Expr
 var = Fix . Var
 
@@ -115,6 +133,7 @@ funRef = Fix . FunRef
 
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
+  pretty (LitInt x) = pretty x
   pretty (LitBool b) = pretty b
 
 instance Pretty a => Pretty (Branch a) where
@@ -149,6 +168,7 @@ instance Pretty Expr where
       go (Var name) = pretty name
       go (App name args) = "@" <> pretty name <> encloseSep "(" ")" ", " (snd <$> args)
       go (FunRef name) = "#" <> pretty name
+      go (Cast e n) = hsep [wrapComplex e, "as", pretty n]
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
@@ -166,7 +186,7 @@ cataM f = (>>= f) . mapM (cataM f) . project
 -- * Type System
 
 data TypeF a
-  = TyDouble
+  = TyNumber Numeric
   | TyBool
   | TyAdt Text
   | TyFun [a] a
@@ -178,7 +198,10 @@ $(deriveShow1 ''TypeF)
 $(deriveEq1 ''TypeF)
 
 instance Unifiable TypeF where
-  zipMatch TyDouble TyDouble = Just TyDouble
+  zipMatch (TyNumber n) (TyNumber m) = case (n, m) of
+    (NumUnknown, _) -> Just (TyNumber m)
+    (_, NumUnknown) -> Just (TyNumber n)
+    _ -> if n == m then Just (TyNumber n) else Nothing
   zipMatch TyBool TyBool = Just TyBool
   zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
@@ -199,7 +222,7 @@ instance Pretty Type where
       wrapComplex (Fix t, ppr) =
         if isComplexType t then parens ppr else ppr
       go :: TypeF (Type, Doc ann) -> Doc ann
-      go TyDouble = "Double"
+      go (TyNumber n) = pretty n
       go TyBool = "Bool"
       go (TyAdt n) = pretty n
       go (TyFun args res) =
