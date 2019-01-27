@@ -6,11 +6,14 @@ import Control.Monad.Except
 import Control.Monad.State
 
 import qualified LLVM.AST as LLVM
+import qualified LLVM.Module as LLVMM
+import LLVM.Context
 
 import Simpl.Analysis
 import Simpl.Ast
 import Simpl.Codegen (runCodegen)
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
+import Paths_simpl_lang
 
 -- | Main error type, aggregating all error types.
 data CompilerErr
@@ -34,6 +37,13 @@ runCompiler symTab
   . flip evalStateT symTab
   . unCompiler
 
+-- | Builds the SimPL runtime
+buildRuntime :: Context -> (LLVMM.Module -> IO a) -> IO a
+buildRuntime ctx cont = do
+  runtimeSourcePath <- getDataFileName "runtime/runtime.ll"
+  LLVMM.withModuleFromLLVMAssembly ctx (LLVMM.File runtimeSourcePath) cont
+
+-- | Compiles a SimPL source file
 fullCompilerPipeline :: SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
 fullCompilerPipeline srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do

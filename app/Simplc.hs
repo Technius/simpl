@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE BangPatterns #-}
 module Simplc where
 
 import qualified Data.ByteString as B
@@ -14,8 +15,9 @@ import Simpl.Compiler
 import qualified Simpl.Cli as Cli
 import qualified Simpl.Parser as Parser
 import LLVM.Target (withHostTargetMachine)
-import LLVM.Module (File(File), withModuleFromAST, writeObjectToFile, moduleLLVMAssembly)
-import LLVM.Internal.Context
+import LLVM.Module ( File(File), withModuleFromAST
+                   , writeObjectToFile , moduleLLVMAssembly, linkModules, Module)
+import LLVM.Context
 import LLVM.Analysis (verify)
 import LLVM.Exception
 import qualified Data.Text as Text
@@ -47,8 +49,14 @@ codegen srcFile@(SourceFile _ decls) =
     Just _ -> do
       liftIO $ putStrLn "Running compiler pipeline"
       let pipeline = ExceptT (fullCompilerPipeline srcFile)
-      llvmMod <- withExceptT (pure . ("Error: " ++) . show) pipeline
-      outputModule llvmMod
+      programAst <- withExceptT (pure . ("Error: " ++) . show) pipeline
+      handleExceptions . liftIO $
+        withContext $ \cr ->
+          buildRuntime cr $ \runtimeMod ->
+            buildModule programAst $ \programMod -> do
+              linkModules programMod runtimeMod
+              moduleLLVMAssembly programMod >>= B.putStr
+              outputModule programMod
     _ -> throwError $ ["No main function found"]
   where
     isMain = \case
@@ -74,13 +82,15 @@ handleExceptions = flip catches $
     handler :: String -> EIO ()
     handler err = throwError $ ["An error occurred:"] ++ lines err
 
-outputModule llvmMod = handleExceptions . liftIO $
+buildModule modAst cont =
+  withContext $ \ctx ->
+    withModuleFromAST ctx modAst $ \llvmMod -> do
+      putStrLn "Verifying AST"
+      verify llvmMod
+      putStrLn "AST verified successfully"
+      cont llvmMod
+
+outputModule :: Module -> IO ()
+outputModule llvmMod =
   withHostTargetMachine $ \target ->
-    withContext $ \ctx ->
-      withModuleFromAST ctx llvmMod $ \mod' -> do
-        putStrLn "Generated IR"
-        moduleLLVMAssembly mod' >>= B.putStr
-        putStrLn "Verifying module"
-        verify mod'
-        putStrLn "Generating code"
-        writeObjectToFile target (File "sample.o") mod'
+    writeObjectToFile target (File "sample.o") llvmMod
