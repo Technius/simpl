@@ -15,7 +15,12 @@ import Data.Text.Prettyprint.Doc
 import Text.Show.Deriving (deriveShow1)
 import Data.Eq.Deriving (deriveEq1)
 
-data Numeric = NumDouble | NumInt | NumUnknown
+-- * AST Type
+
+-- | Numeric types
+data Numeric = NumDouble -- ^ 64-bit floating point
+             | NumInt -- ^ 64-bit signed integer
+             | NumUnknown -- ^ Unknown (defaults to 64-bit floating point)
   deriving (Show, Eq)
 
 instance Pretty Numeric where
@@ -24,17 +29,31 @@ instance Pretty Numeric where
     NumInt -> "Int"
     NumUnknown -> "Num"
 
--- * AST Type
+-- | Binary operator types
+data BinaryOp
+  = Add -- ^ Add
+  | Sub -- ^ Subtract
+  | Mul -- ^ Multiply
+  | Div -- ^ Divide
+  | Lt -- ^ Less than
+  | Lte -- ^ Less than or equal to
+  | Equal -- ^ Equality
+  deriving (Show, Eq)
 
+instance Pretty BinaryOp where
+  pretty = \case
+    Add -> "+"
+    Sub -> "-"
+    Mul -> "*"
+    Div -> "/"
+    Lt -> "<"
+    Lte -> "<="
+    Equal -> "=="
+
+-- | Main AST type
 data ExprF a
   = Lit !Literal -- ^ Literal value
-  | Add !a !a -- ^ Add (doubles)
-  | Sub !a !a -- ^ Subtract (doubles)
-  | Mul !a !a -- ^ Multiply (doubles)
-  | Div !a !a -- ^ Divide (doubles)
-  | Lt !a !a -- ^ Less than (doubles)
-  | Lte !a !a -- ^ Less than or equal to (doubles)
-  | Equal !a !a -- ^ Equality (doubles)
+  | BinOp !BinaryOp !a !a -- ^ Binary operator
   | If !a !a !a -- ^ If expression
   | Cons !Text ![a] -- ^ Construct ADT
   | Case [Branch a] !a -- ^ Case deconstruction
@@ -42,7 +61,7 @@ data ExprF a
   | Var Text -- ^ Variable
   | App Text [a] -- ^ Function application
   | FunRef Text -- ^ Function reference
-  | Cast !a !Numeric
+  | Cast !a !Numeric -- ^ Numeric value cast
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -83,26 +102,29 @@ litInt = Fix . Lit . LitInt
 litBool :: Bool -> Expr
 litBool = Fix . Lit . LitBool
 
+binop :: BinaryOp -> Expr -> Expr -> Expr
+binop op a b = Fix (BinOp op a b)
+
 add :: Expr -> Expr -> Expr
-add a b = Fix (Add a b)
+add = binop Add
 
 sub :: Expr -> Expr -> Expr
-sub a b = Fix (Sub a b)
+sub = binop Sub
 
 mul :: Expr -> Expr -> Expr
-mul a b = Fix (Mul a b)
+mul = binop Mul
 
 div :: Expr -> Expr -> Expr
-div a b = Fix (Div a b)
+div = binop Div
 
 lt :: Expr -> Expr -> Expr
-lt a b = Fix (Lt a b)
+lt = binop Lt
 
 lte :: Expr -> Expr -> Expr
-lte a b = Fix (Lte a b)
+lte = binop Lte
 
 eq :: Expr -> Expr -> Expr
-eq a b = Fix (Equal a b)
+eq = binop Equal
 
 ifExpr :: Expr -> Expr -> Expr -> Expr
 ifExpr cond t1 t2 = Fix (If cond t1 t2)
@@ -146,16 +168,9 @@ instance Pretty Expr where
       wrapComplex (x, px)
         | isComplexExpr x = parens px
         | otherwise = px
-      binop op p1 p2 = wrapComplex p1 <+> op <+> wrapComplex p2
       go :: ExprF (Expr, Doc ann) -> Doc ann
       go (Lit l) = pretty l
-      go (Add p1 p2) = binop "+" p1 p2
-      go (Sub p1 p2) = binop "-" p1 p2
-      go (Mul p1 p2) = binop "*" p1 p2
-      go (Div p1 p2) = binop "/" p1 p2
-      go (Lt p1 p2) = binop "<" p1 p2
-      go (Lte p1 p2) = binop "<=" p1 p2
-      go (Equal p1 p2) = binop "==" p1 p2
+      go (BinOp op p1 p2) = wrapComplex p1 <+> pretty op <+> wrapComplex p2
       go (If cond (_, t1) (_, t2)) =
         hsep ["if", wrapComplex cond, "then", t1, "else", t2]
       go (Cons name args) =

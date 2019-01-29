@@ -208,6 +208,50 @@ literalToLLVM = \case
   LitDouble x -> resultValue <$> LLVMIR.double x
   LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
 
+-- | Generates code for a binary operation
+binopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+      => m Result
+      -> m Result
+      -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
+      -> m Result
+binopCodegen x y op = do
+  x' <- joinPoint1 x
+  y' <- joinPoint1 y
+  res <- op x' y'
+  pure $ resultValue res
+
+-- | Generates code for a numeric binary operation
+numBinopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+      => m Result
+      -> m Result
+      -> Type
+      -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Float operation
+      -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Integer operation
+      -> m Result
+numBinopCodegen x y ty opDouble opInt =
+  case unfix ty of
+    TyNumber numTy ->
+      if numTy == NumInt then binopCodegen x y opInt
+                         else binopCodegen x y opDouble
+    _ -> error "Invariant violated"
+
+binopToLLVM :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+            => BinaryOp -- ^ Operation
+            -> Type -- ^ Type of the inputs
+            -> m Result
+            -> m Result
+            -> m Result
+binopToLLVM op ty x y =
+  let (floatInstr, intInstr) = case op of
+        Add -> (LLVMIR.fadd, LLVMIR.add)
+        Sub -> (LLVMIR.fsub, LLVMIR.sub)
+        Mul -> (LLVMIR.fmul, LLVMIR.mul)
+        Div -> (LLVMIR.fdiv, LLVMIR.sdiv)
+        Lt -> ((LLVMIR.fcmp LLVMFP.OLT), (LLVMIR.icmp LLVMIP.SLT))
+        Lte -> ((LLVMIR.fcmp LLVMFP.OLE), (LLVMIR.icmp LLVMIP.SLE))
+        Equal -> ((LLVMIR.fcmp LLVMFP.OEQ), (LLVMIR.icmp LLVMIP.EQ))
+  in numBinopCodegen x y ty floatInstr intInstr
+
 arithToLLVM :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
 arithToLLVM = para (go . annGetExpr)
   where
@@ -215,13 +259,7 @@ arithToLLVM = para (go . annGetExpr)
        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
     go = \case
       Lit l -> literalToLLVM l
-      Add (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fadd LLVMIR.add
-      Sub (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fsub LLVMIR.sub
-      Mul (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fmul LLVMIR.mul
-      Div (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) LLVMIR.fdiv LLVMIR.sdiv
-      Lt (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OLT) (LLVMIR.icmp LLVMIP.SLT)
-      Lte (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OLE) (LLVMIR.icmp LLVMIP.SLE)
-      Equal (ex, x) (_, y) -> numBinop x y (annGetAnn (unfix ex)) (LLVMIR.fcmp LLVMFP.OEQ) (LLVMIR.icmp LLVMIP.EQ)
+      BinOp op (ex, x) (_, y) -> binopToLLVM op (annGetAnn (unfix ex)) x y
       If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
         LLVMIR.ensureBlock
         cond <- joinPoint1 condInstr
@@ -334,29 +372,6 @@ arithToLLVM = para (go . annGetExpr)
               _ -> error "codegen: attempting to cast non-numeric"
         expr <- joinPoint1 exprM
         resultValue <$> castOp origNum num expr
-    binop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-          => m Result
-          -> m Result
-          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
-          -> m Result
-    binop x y op = do
-      x' <- joinPoint1 x
-      y' <- joinPoint1 y
-      res <- op x' y'
-      pure $ resultValue res
-    numBinop :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-          => m Result
-          -> m Result
-          -> Type
-          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Float operation
-          -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Integer operation
-          -> m Result
-    numBinop x y ty opDouble opInt =
-      case unfix ty of
-        TyNumber numTy ->
-          if numTy == NumInt then binop x y opInt
-                             else binop x y opDouble
-        _ -> error "Invariant violated"
     lookupName :: MonadState CodegenTable m
                => Text
                -> m (Maybe LLVM.Operand)

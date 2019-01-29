@@ -81,13 +81,18 @@ tcExprToTypedExpr =
 inferType :: Expr -> Typecheck TCExpr
 inferType = cata $ \case
   Lit l -> pure $ annotate (Lit l) (UTerm (literalType l))
-  Add x y -> doubleBinop Add (UTerm (TyNumber NumUnknown)) True x y
-  Sub x y -> doubleBinop Sub (UTerm (TyNumber NumUnknown)) True x y
-  Mul x y -> doubleBinop Mul (UTerm (TyNumber NumUnknown)) True x y
-  Div x y -> doubleBinop Div (UTerm (TyNumber NumUnknown)) True x y
-  Lt x y -> doubleBinop Lt (UTerm TyBool) False x y
-  Lte x y -> doubleBinop Lte (UTerm TyBool) False x y
-  Equal x y -> doubleBinop Equal (UTerm TyBool) False x y
+  BinOp op x y ->
+    let tyNumUnknown = UTerm (TyNumber NumUnknown)
+        tyBool = UTerm TyBool
+        (resTy, unifyResWithArgs) = case op of
+          Add -> (tyNumUnknown, True)
+          Sub -> (tyNumUnknown, True)
+          Mul -> (tyNumUnknown, True)
+          Div -> (tyNumUnknown, True)
+          Lt -> (tyBool, False)
+          Lte -> (tyBool, False)
+          Equal -> (tyBool, False)
+    in typecheckBinop op resTy unifyResWithArgs x y
   If condM t1M t2M -> do
     cond <- condM
     _ <- unifyTy (extractTy cond) (UTerm TyBool)
@@ -173,18 +178,18 @@ inferType = cata $ \case
     extractTy :: TCExpr -> UType
     extractTy = annGetAnn . unfix
 
-    doubleBinop :: (TCExpr -> TCExpr -> ExprF TCExpr)
-                -> UType -- ^ Result type
-                -> Bool -- ^ Whether result type should be unified with arguments
-                -> Typecheck TCExpr
-                -> Typecheck TCExpr
-                -> Typecheck TCExpr
-    doubleBinop op resultTy unifyArgResult xm ym = do
+    typecheckBinop :: BinaryOp -- ^ Operator
+                   -> UType -- ^ Result type
+                   -> Bool -- ^ Whether result type should be unified with arguments
+                   -> Typecheck TCExpr
+                   -> Typecheck TCExpr
+                   -> Typecheck TCExpr
+    typecheckBinop op resultTy unifyArgResult xm ym = do
       (x, y) <- liftA2 (,) xm ym
       xTy <- unifyTy (extractTy x) (UTerm (TyNumber NumUnknown))
       yTy <- unifyTy (extractTy y) xTy
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
-      pure $ annotate (op x y) rTy
+      pure $ annotate (BinOp op x y) rTy
 
     lookupFun :: Text -> [UType] -> Typecheck ([Type], Type)
     lookupFun name argTys =
