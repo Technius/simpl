@@ -57,7 +57,7 @@ library:
 
 executables:
   simplc:
-    source-dirs: app
+    source-dirs: compiler
     main: Simplc
     ghc-options:
     - -threaded
@@ -66,7 +66,7 @@ executables:
     dependencies:
     - simpl-lang
   simpl-repl:
-    source-dirs: app
+    source-dirs: repl
     main: SimplRepl
     ghc-options:
     - -threaded
