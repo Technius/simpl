@@ -208,15 +208,14 @@ mallocRef = LLVM.ConstantOperand $
 simplStringNewRef :: LLVM.Operand
 simplStringNewRef = LLVM.ConstantOperand $
   LLVMC.GlobalReference
-  (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.NamedTypeReference (LLVM.mkName "simpl_string")
+  (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.NamedTypeReference (LLVM.mkName "struct.simpl_string")
                                 , LLVM.argumentTypes = [LLVM.i64, LLVM.ptr LLVM.i8]
                                 , LLVM.isVarArg = False })
   (LLVM.mkName "simpl_string_new")
 
-llvmEmitSimplStringNew :: LLVMIR.MonadModuleBuilder m => m LLVM.Operand
-llvmEmitSimplStringNew =
-  LLVMIR.extern (LLVM.mkName "simpl_string_new") [LLVM.i64, LLVM.ptr LLVM.i8]
-                (LLVM.NamedTypeReference (LLVM.mkName "simpl_string"))
+llvmEmitSimplStringNew :: LLVMIR.MonadModuleBuilder m => LLVM.Type -> m LLVM.Operand
+llvmEmitSimplStringNew ty =
+  LLVMIR.extern (LLVM.mkName "simpl_string_new") [LLVM.i64, LLVM.ptr LLVM.i8] ty
 
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
@@ -426,7 +425,7 @@ typeToLLVM = go . unfix
         NumInt -> LLVM.i64
         NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
-      TyString -> LLVM.NamedTypeReference (LLVM.mkName "simpl_string")
+      TyString -> LLVM.NamedTypeReference (LLVM.mkName "struct.simpl_string")
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
         LLVM.ptr $ LLVM.FunctionType
@@ -491,7 +490,8 @@ initCodegenTable symTab = do
 -- | Generate names for runtime classes
 runtimeDecls :: LLVMIR.ModuleBuilderT Codegen ()
 runtimeDecls = do
-  _ <- LLVMIR.typedef (LLVM.mkName "simpl_string") Nothing
+  simplStringTy <- LLVMIR.typedef (LLVM.mkName "struct.simpl_string") Nothing
+  _ <- llvmEmitSimplStringNew simplStringTy
   pure ()
 
 generateLLVM :: [Decl Expr]
@@ -506,7 +506,6 @@ generateLLVM decls symTab = mdo
   _ <- runtimeDecls
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
-  _ <- llvmEmitSimplStringNew
   forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
     adtToLLVM name ctors
   -- Insert function operands into symbol table before emitting so order of
