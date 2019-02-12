@@ -65,6 +65,7 @@ literalType = \case
   LitBool _ -> TyBool
   LitDouble _ -> TyNumber NumDouble
   LitInt _ -> TyNumber NumInt
+  LitString _ -> TyString
 
 -- | Annotate every AST node with a unification meta variable
 attachExprMetaVar :: Expr -> Typecheck TCExpr
@@ -234,6 +235,7 @@ typeToUtype :: Type -> UType
 typeToUtype = cata $ \case
   TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
+  TyString -> UTerm TyString
   TyAdt n -> UTerm (TyAdt n)
   TyFun args res -> UTerm (TyFun args res)
 

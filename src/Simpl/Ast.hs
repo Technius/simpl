@@ -68,6 +68,7 @@ data Literal
   = LitDouble Double
   | LitInt Int
   | LitBool Bool
+  | LitString Text
   deriving (Eq, Show)
 
 data Branch a = BrAdt Text [Text] a -- ^ Branch given constructor name, bindings, and expr
@@ -101,6 +102,9 @@ litInt = Fix . Lit . LitInt
 
 litBool :: Bool -> Expr
 litBool = Fix . Lit . LitBool
+
+litString :: Text -> Expr
+litString = Fix . Lit . LitString
 
 binop :: BinaryOp -> Expr -> Expr -> Expr
 binop op a b = Fix (BinOp op a b)
@@ -157,6 +161,7 @@ instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitInt x) = pretty x
   pretty (LitBool b) = pretty b
+  pretty (LitString s) = pretty s
 
 instance Pretty a => Pretty (Branch a) where
   pretty (BrAdt name bindings expr) =
@@ -203,6 +208,7 @@ cataM f = (>>= f) . mapM (cataM f) . project
 data TypeF a
   = TyNumber Numeric
   | TyBool
+  | TyString
   | TyAdt Text
   | TyFun [a] a
   deriving (Show, Functor, Foldable, Traversable)
@@ -218,6 +224,7 @@ instance Unifiable TypeF where
     (_, NumUnknown) -> Just (TyNumber n)
     _ -> if n == m then Just (TyNumber n) else Nothing
   zipMatch TyBool TyBool = Just TyBool
+  zipMatch TyString TyString = Just TyString
   zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
     if length as1 == length as2 then
@@ -239,6 +246,7 @@ instance Pretty Type where
       go :: TypeF (Type, Doc ann) -> Doc ann
       go (TyNumber n) = pretty n
       go TyBool = "Bool"
+      go TyString = "String"
       go (TyAdt n) = pretty n
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])

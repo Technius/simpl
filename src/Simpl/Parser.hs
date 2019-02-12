@@ -52,12 +52,15 @@ identifier = lexeme go >>= check
       <*> (Text.pack <$> many (C.alphaNumChar <|> C.char '_'))
 
 literal :: Parser m Expr
-literal = lexeme (bool <|> number)
+literal = lexeme (bool <|> number <|> str)
   where
     bool = Ast.litBool <$> ((symbol "true" >> pure True) <|> (symbol "false" >> pure False))
     number = try double <|> integer
     double = Ast.litDouble <$> signed L.float
     integer = Ast.litInt <$> signed L.decimal
+    quoteChar :: Parser m Char    -- avoid type variable ambiguity
+    quoteChar = C.char '"'
+    str = Ast.litString . Text.pack <$> (quoteChar >> manyTill L.charLiteral quoteChar)
 
 var :: Parser m Expr
 var = Ast.var <$> identifier
@@ -148,7 +151,9 @@ numeric :: Parser m Ast.Numeric
 numeric = (symbol "Double" >> pure Ast.NumDouble) <|> (symbol "Int" >> pure Ast.NumInt)
 
 typeLit :: Parser m Type
-typeLit = Fix <$> ((Ast.TyNumber <$> numeric) <|> (symbol "Bool" >> pure Ast.TyBool))
+typeLit = Fix <$> ((Ast.TyNumber <$> numeric)
+                   <|> (symbol "Bool" >> pure Ast.TyBool)
+                   <|> (symbol "String" >> pure Ast.TyString))
 
 typeIdentifier :: Parser m Text
 typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumChar))

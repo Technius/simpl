@@ -22,6 +22,9 @@ import Data.Text.Prettyprint.Doc (pretty)
 import Data.Char (ord)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
+import Data.Text.Encoding (encodeUtf8)
+import Data.ByteString ()
+import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Functor.Identity
 import Data.List.NonEmpty (NonEmpty(..))
@@ -202,11 +205,35 @@ mallocRef = LLVM.ConstantOperand $
                                 , LLVM.isVarArg = False })
   (LLVM.mkName "malloc")
 
+simplStringNewRef :: LLVM.Operand
+simplStringNewRef = LLVM.ConstantOperand $
+  LLVMC.GlobalReference
+  (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.NamedTypeReference (LLVM.mkName "simpl_string")
+                                , LLVM.argumentTypes = [LLVM.i64, LLVM.ptr LLVM.i8]
+                                , LLVM.isVarArg = False })
+  (LLVM.mkName "simpl_string_new")
+
+llvmEmitSimplStringNew :: LLVMIR.MonadModuleBuilder m => m LLVM.Operand
+llvmEmitSimplStringNew =
+  LLVMIR.extern (LLVM.mkName "simpl_string_new") [LLVM.i64, LLVM.ptr LLVM.i8]
+                (LLVM.NamedTypeReference (LLVM.mkName "simpl_string"))
+
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
   LitInt x -> resultValue <$> LLVMIR.int64 (fromIntegral x)
   LitDouble x -> resultValue <$> LLVMIR.double x
   LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
+  LitString t -> do
+    -- TODO: Store literal strings in global memory
+    let byteS = encodeUtf8 t
+    let len = toInteger (BS.length byteS)
+    lenOper <- LLVMIR.int64 len
+    let byteData = LLVMC.Int 8 . toInteger <$> BS.unpack (byteS)
+    byteDataOper <- LLVMIR.array byteData
+    bytePtr <- LLVMIR.call mallocRef [(lenOper, [])]
+    _ <- LLVMIR.store bytePtr 0 byteDataOper
+    str <- LLVMIR.call simplStringNewRef [(lenOper, []), (bytePtr, [])]
+    pure $ resultValue str
 
 -- | Generates code for a binary operation
 binopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
@@ -399,6 +426,7 @@ typeToLLVM = go . unfix
         NumInt -> LLVM.i64
         NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
+      TyString -> LLVM.NamedTypeReference (LLVM.mkName "simpl_string")
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
         LLVM.ptr $ LLVM.FunctionType
@@ -460,6 +488,12 @@ initCodegenTable symTab = do
   modify $ \t -> t { tableAdts = adts
                    , tableCtors = Map.fromList (join ctors) }
 
+-- | Generate names for runtime classes
+runtimeDecls :: LLVMIR.ModuleBuilderT Codegen ()
+runtimeDecls = do
+  _ <- LLVMIR.typedef (LLVM.mkName "simpl_string") Nothing
+  pure ()
+
 generateLLVM :: [Decl Expr]
              -> SymbolTable TypedExpr
              -> LLVMIR.ModuleBuilderT Codegen ()
@@ -469,8 +503,10 @@ generateLLVM decls symTab = mdo
   (_, resultFmt) <- staticString ".resultformat" "Result: %.i\n"
   let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
+  _ <- runtimeDecls
   printf <- llvmPrintf
   _ <- llvmEmitMalloc
+  _ <- llvmEmitSimplStringNew
   forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
     adtToLLVM name ctors
   -- Insert function operands into symbol table before emitting so order of
