@@ -34,7 +34,7 @@ signed :: Num a => Parser m a -> Parser m a
 signed = L.signed whitespace
 
 reservedKeywords :: [Text]
-reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as"]
+reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as", "println"]
 
 keyword :: Text -> Parser m Text
 keyword k = lexeme (C.string k <* notFollowedBy C.alphaNumChar)
@@ -144,8 +144,11 @@ castExpr = lexeme $ do
   n <- numeric
   pure $ Ast.castExpr e n
 
+printExpr :: Parser m Expr
+printExpr = lexeme (symbol "println" >> Ast.printExpr <$> parens expr)
+
 expr :: Parser m Expr
-expr = letExpr <|> caseExpr <|> ifExpr <|> castExpr <|> try adtCons <|> arith
+expr = letExpr <|> caseExpr <|> ifExpr <|> castExpr <|> printExpr <|> try adtCons <|> arith
 
 numeric :: Parser m Ast.Numeric
 numeric = (symbol "Double" >> pure Ast.NumDouble) <|> (symbol "Int" >> pure Ast.NumInt)

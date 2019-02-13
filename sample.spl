@@ -70,7 +70,7 @@ data Foo = Bar Double
 # }
 
 fun main : Int := {
-  1
+  println("Hello world!")
 }
 
 fun string_lit : String := {

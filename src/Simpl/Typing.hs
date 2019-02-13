@@ -172,6 +172,11 @@ inferType = cata $ \case
     ty' <- unifyTy ty (UTerm (TyNumber NumUnknown))
     let expr' = annotate (annGetExpr . unfix $ expr) ty'
     pure $ annotate (Cast expr' num) (UTerm (TyNumber num))
+  Print exprM -> do
+    expr <- exprM
+    let ty = extractTy expr
+    _ <- unifyTy ty (UTerm TyString)
+    pure $ annotate (Print expr) (UTerm (TyNumber NumInt))
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc

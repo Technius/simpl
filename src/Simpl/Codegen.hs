@@ -54,7 +54,8 @@ data CodegenTable =
                  , tableCtors :: Map Text (LLVM.Name, LLVM.Name, Int) -- ^ Data type name, ctor name, index
                  , tableAdts :: Map Text (LLVM.Name, Type, [Constructor])
                  , tableFuns :: Map Text LLVM.Operand
-                 , tableCurrentJoin :: LLVM.Name }
+                 , tableCurrentJoin :: LLVM.Name
+                 , tablePrintf :: LLVM.Operand }
   deriving (Show)
 
 -- | An empty codegen table. This will cause a crash if codegen is run when not
@@ -65,7 +66,8 @@ emptyCodegenTable =
                  , tableCtors = Map.empty
                  , tableAdts = Map.empty
                  , tableFuns = Map.empty
-                 , tableCurrentJoin = LLVM.mkName "__default_join_point" }
+                 , tableCurrentJoin = LLVM.mkName "__default_join_point"
+                 , tablePrintf = error "printf not set" }
 
 newtype CodegenT m a =
   CodegenT { unCodegen :: StateT CodegenTable m a }
@@ -209,12 +211,12 @@ llvmEmitMemcpy :: LLVMIR.MonadModuleBuilder m => m LLVM.Operand
 llvmEmitMemcpy = do
   let args = [("dest", LLVM.ptr LLVM.i8)
              , ("src", LLVM.ptr LLVM.i8)
-             , ("len", LLVM.i64)
-             , ("volative", LLVM.i1)]
+             , ("len", LLVM.i64) ]
+             -- , ("volative", LLVM.i1)]
       ty = LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.void
                                         , LLVM.argumentTypes = snd <$> args
                                         , LLVM.isVarArg = False }
-      name = LLVM.mkName "llvm.memcpy.p0i8.p0i8.i64"
+      name = LLVM.mkName "memcpy" -- "llvm.memcpy.p0i8.p0i8.i64"
   LLVMIR.emitDefn $ LLVM.GlobalDefinition LLVM.functionDefaults
     { LLVMG.name = name
     , LLVMG.linkage = LLVM.External
@@ -227,9 +229,9 @@ memcpyRef :: LLVM.Operand
 memcpyRef = LLVM.ConstantOperand $
   LLVMC.GlobalReference
   (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.void
-                                , LLVM.argumentTypes = [LLVM.ptr LLVM.i8, LLVM.ptr LLVM.i8, LLVM.i64, LLVM.i1]
+                                , LLVM.argumentTypes = [LLVM.ptr LLVM.i8, LLVM.ptr LLVM.i8, LLVM.i64] --, LLVM.i1]
                                 , LLVM.isVarArg = False })
-  (LLVM.mkName "llvm.memcpy.p0i8.p0i8.i64")
+  (LLVM.mkName "memcpy") -- "llvm.memcpy.p0i8.p0i8.i64")
 
 simplStringNewRef :: LLVM.Operand
 simplStringNewRef = LLVM.ConstantOperand $
@@ -238,6 +240,14 @@ simplStringNewRef = LLVM.ConstantOperand $
                                 , LLVM.argumentTypes = [LLVM.i64, LLVM.ptr LLVM.i8]
                                 , LLVM.isVarArg = False })
   (LLVM.mkName "simpl_string_new")
+
+simplStringCstringRef :: LLVM.Operand
+simplStringCstringRef = LLVM.ConstantOperand $
+  LLVMC.GlobalReference
+  (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.ptr LLVM.i8
+                                , LLVM.argumentTypes = [LLVM.NamedTypeReference (LLVM.mkName "struct.simpl_string")]
+                                , LLVM.isVarArg = False })
+  (LLVM.mkName "simpl_string_cstring")
 
 llvmEmitSimplStringNew :: LLVMIR.MonadModuleBuilder m => LLVM.Type -> m LLVM.Operand
 llvmEmitSimplStringNew strTy = do
@@ -272,7 +282,7 @@ literalToLLVM = \case
     byteDataPtr' <- LLVMIR.bitcast byteDataPtr (LLVM.ptr LLVM.i8)
     bytePtr <- LLVMIR.call mallocRef [(lenOper, [])]
     volOper <- LLVMIR.bit 0
-    _ <- LLVMIR.call memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, []), (volOper, [])]
+    _ <- LLVMIR.call memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, [])] -- , (volOper, [])]
     str <- LLVMIR.call simplStringNewRef [(lenOper, []), (bytePtr, [])]
     pure $ resultValue str
 
@@ -440,6 +450,22 @@ arithToLLVM = para (go . annGetExpr)
               _ -> error "codegen: attempting to cast non-numeric"
         expr <- joinPoint1 exprM
         resultValue <$> castOp origNum num expr
+      Print (_, exprM) -> do
+        let fmtStr = encodeUtf8 (fromString "Print: %s\n")
+        let fmtStrLen = toInteger (BS.length fmtStr)
+        let fmtStrData = LLVMC.Int 8 . toInteger <$> BS.unpack fmtStr
+        fmtStrOper <- LLVMIR.array fmtStrData
+        fmtStrPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger fmtStrLen) LLVM.i8) Nothing 0
+        _ <- LLVMIR.store fmtStrPtr 0 fmtStrOper
+        printf <- gets tablePrintf
+        str <- joinPoint1 exprM
+        strPtr <- LLVMIR.alloca (LLVM.NamedTypeReference "struct.simpl_string") Nothing 0
+        _ <- LLVMIR.store strPtr 0 str
+        exprCstring <- LLVMIR.call simplStringCstringRef [(strPtr, [])]
+        fmtStrPtr' <- LLVMIR.bitcast fmtStrPtr (LLVM.ptr LLVM.i8)
+        _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
+        retval <- LLVMIR.int64 0
+        pure $ resultValue retval
     lookupName :: MonadState CodegenTable m
                => Text
                -> m (Maybe LLVM.Operand)
@@ -534,6 +560,7 @@ runtimeDecls :: LLVMIR.ModuleBuilderT Codegen ()
 runtimeDecls = do
   simplStringTy <- LLVMIR.typedef (LLVM.mkName "struct.simpl_string") Nothing
   _ <- llvmEmitSimplStringNew simplStringTy
+  _ <- LLVMIR.extern (LLVM.mkName "simpl_string_cstring") [simplStringTy] (LLVM.ptr LLVM.i8)
   pure ()
 
 generateLLVM :: [Decl Expr]
@@ -548,6 +575,7 @@ generateLLVM decls symTab = mdo
   _ <- llvmEmitMalloc
   _ <- llvmEmitMemcpy
   printf <- llvmPrintf
+  modify (\t -> t { tablePrintf = printf })
   _ <- runtimeDecls
   forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
     adtToLLVM name ctors

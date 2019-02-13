@@ -62,6 +62,7 @@ data ExprF a
   | App Text [a] -- ^ Function application
   | FunRef Text -- ^ Function reference
   | Cast !a !Numeric -- ^ Numeric value cast
+  | Print !a -- ^ Print string (temporary)
   deriving (Functor, Foldable, Traversable, Show)
 
 data Literal
@@ -157,8 +158,8 @@ appExpr name = Fix . App name
 funRef :: Text -> Expr
 funRef = Fix . FunRef
 
-printStr :: Expr -> Expr
-printStr = Fix . Print
+printExpr :: Expr -> Expr
+printExpr = Fix . Print
 
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
@@ -192,6 +193,7 @@ instance Pretty Expr where
       go (App name args) = "@" <> pretty name <> encloseSep "(" ")" ", " (snd <$> args)
       go (FunRef name) = "#" <> pretty name
       go (Cast e n) = hsep [wrapComplex e, "as", pretty n]
+      go (Print (_, e)) = "println(" <> e <> ")"
 
 $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
