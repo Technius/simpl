@@ -157,11 +157,14 @@ appExpr name = Fix . App name
 funRef :: Text -> Expr
 funRef = Fix . FunRef
 
+printStr :: Expr -> Expr
+printStr = Fix . Print
+
 instance Pretty Literal where
   pretty (LitDouble d) = pretty d
   pretty (LitInt x) = pretty x
   pretty (LitBool b) = pretty b
-  pretty (LitString s) = pretty s
+  pretty (LitString s) = "\"" <> pretty (show s) <> "\""
 
 instance Pretty a => Pretty (Branch a) where
   pretty (BrAdt name bindings expr) =
