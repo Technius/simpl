@@ -205,6 +205,32 @@ mallocRef = LLVM.ConstantOperand $
                                 , LLVM.isVarArg = False })
   (LLVM.mkName "malloc")
 
+llvmEmitMemcpy :: LLVMIR.MonadModuleBuilder m => m LLVM.Operand
+llvmEmitMemcpy = do
+  let args = [("dest", LLVM.ptr LLVM.i8)
+             , ("src", LLVM.ptr LLVM.i8)
+             , ("len", LLVM.i64)
+             , ("volative", LLVM.i1)]
+      ty = LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.void
+                                        , LLVM.argumentTypes = snd <$> args
+                                        , LLVM.isVarArg = False }
+      name = LLVM.mkName "llvm.memcpy.p0i8.p0i8.i64"
+  LLVMIR.emitDefn $ LLVM.GlobalDefinition LLVM.functionDefaults
+    { LLVMG.name = name
+    , LLVMG.linkage = LLVM.External
+    , LLVMG.parameters = ([LLVM.Parameter t n [] | (n, t) <- args], False)
+    , LLVMG.returnType = LLVM.void
+    }
+  pure . LLVM.ConstantOperand $ LLVMC.GlobalReference ty name
+
+memcpyRef :: LLVM.Operand
+memcpyRef = LLVM.ConstantOperand $
+  LLVMC.GlobalReference
+  (LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = LLVM.void
+                                , LLVM.argumentTypes = [LLVM.ptr LLVM.i8, LLVM.ptr LLVM.i8, LLVM.i64, LLVM.i1]
+                                , LLVM.isVarArg = False })
+  (LLVM.mkName "llvm.memcpy.p0i8.p0i8.i64")
+
 simplStringNewRef :: LLVM.Operand
 simplStringNewRef = LLVM.ConstantOperand $
   LLVMC.GlobalReference
@@ -214,8 +240,20 @@ simplStringNewRef = LLVM.ConstantOperand $
   (LLVM.mkName "simpl_string_new")
 
 llvmEmitSimplStringNew :: LLVMIR.MonadModuleBuilder m => LLVM.Type -> m LLVM.Operand
-llvmEmitSimplStringNew ty =
-  LLVMIR.extern (LLVM.mkName "simpl_string_new") [LLVM.i64, LLVM.ptr LLVM.i8] ty
+llvmEmitSimplStringNew strTy = do
+  -- LLVMIR.extern is not used here because of llvm-hs/llvm-hs#230
+  let args = [("byte_count", LLVM.i64), ("data", LLVM.ptr LLVM.i8)]
+      ty = LLVM.ptr $ LLVM.FunctionType { LLVM.resultType = strTy
+                                        , LLVM.argumentTypes = snd <$> args
+                                        , LLVM.isVarArg = False }
+      name = LLVM.mkName "simpl_string_new"
+  LLVMIR.emitDefn $ LLVM.GlobalDefinition LLVM.functionDefaults
+    { LLVMG.name = name
+    , LLVMG.linkage = LLVM.External
+    , LLVMG.parameters = ([LLVM.Parameter t n [] | (n, t) <- args], False)
+    , LLVMG.returnType = strTy
+    }
+  pure . LLVM.ConstantOperand $ LLVMC.GlobalReference ty name
 
 literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
 literalToLLVM = \case
@@ -227,10 +265,14 @@ literalToLLVM = \case
     let byteS = encodeUtf8 t
     let len = toInteger (BS.length byteS)
     lenOper <- LLVMIR.int64 len
-    let byteData = LLVMC.Int 8 . toInteger <$> BS.unpack (byteS)
+    let byteData = LLVMC.Int 8 . toInteger <$> BS.unpack byteS
     byteDataOper <- LLVMIR.array byteData
+    byteDataPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger len) LLVM.i8) Nothing 0
+    _ <- LLVMIR.store byteDataPtr 0 byteDataOper
+    byteDataPtr' <- LLVMIR.bitcast byteDataPtr (LLVM.ptr LLVM.i8)
     bytePtr <- LLVMIR.call mallocRef [(lenOper, [])]
-    _ <- LLVMIR.store bytePtr 0 byteDataOper
+    volOper <- LLVMIR.bit 0
+    _ <- LLVMIR.call memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, []), (volOper, [])]
     str <- LLVMIR.call simplStringNewRef [(lenOper, []), (bytePtr, [])]
     pure $ resultValue str
 
@@ -503,9 +545,10 @@ generateLLVM decls symTab = mdo
   (_, resultFmt) <- staticString ".resultformat" "Result: %.i\n"
   let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
-  _ <- runtimeDecls
-  printf <- llvmPrintf
   _ <- llvmEmitMalloc
+  _ <- llvmEmitMemcpy
+  printf <- llvmPrintf
+  _ <- runtimeDecls
   forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
     adtToLLVM name ctors
   -- Insert function operands into symbol table before emitting so order of
