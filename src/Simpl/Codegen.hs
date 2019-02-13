@@ -451,7 +451,7 @@ arithToLLVM = para (go . annGetExpr)
         expr <- joinPoint1 exprM
         resultValue <$> castOp origNum num expr
       Print (_, exprM) -> do
-        let fmtStr = encodeUtf8 (fromString "Print: %s\n")
+        let fmtStr = encodeUtf8 (fromString "Print: %s\n\0")
         let fmtStrLen = toInteger (BS.length fmtStr)
         let fmtStrData = LLVMC.Int 8 . toInteger <$> BS.unpack fmtStr
         fmtStrOper <- LLVMIR.array fmtStrData
@@ -459,9 +459,7 @@ arithToLLVM = para (go . annGetExpr)
         _ <- LLVMIR.store fmtStrPtr 0 fmtStrOper
         printf <- gets tablePrintf
         str <- joinPoint1 exprM
-        strPtr <- LLVMIR.alloca (LLVM.NamedTypeReference "struct.simpl_string") Nothing 0
-        _ <- LLVMIR.store strPtr 0 str
-        exprCstring <- LLVMIR.call simplStringCstringRef [(strPtr, [])]
+        exprCstring <- LLVMIR.call simplStringCstringRef [(str, [])]
         fmtStrPtr' <- LLVMIR.bitcast fmtStrPtr (LLVM.ptr LLVM.i8)
         _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
         retval <- LLVMIR.int64 0
@@ -569,7 +567,7 @@ generateLLVM :: [Decl Expr]
 generateLLVM decls symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
-  (_, resultFmt) <- staticString ".resultformat" "Result: %.i\n"
+  (_, resultFmt) <- staticString ".resultformat" "Result: %i\n"
   let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   _ <- llvmEmitMalloc

@@ -28,7 +28,7 @@ struct simpl_string simpl_from_cstring(char* cstring);
 /**
  * Constructs a C string from a simpl_string.
  */
-char* simpl_string_cstring(struct simpl_string* s);
+char* simpl_string_cstring(const struct simpl_string s);
 
 int simpl_string_print(struct simpl_string* s);
 
