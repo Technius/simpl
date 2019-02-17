@@ -94,6 +94,15 @@ instance Monad m => MonadReader CodegenTable (CodegenT m) where
     put curTable
     pure result
 
+initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
+initCodegenTable symTab = do
+  let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
+  ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
+    forM ([0..] `zip` ctors) $ \(i, Ctor ctorName _) ->
+      pure (ctorName, (adtName, llvmName ctorName, i))
+  modify $ \t -> t { tableAdts = adts
+                   , tableCtors = Map.fromList (join ctors) }
+
 data Result = Values (NonEmpty LLVM.Operand) | Branching (NonEmpty (LLVM.Operand, LLVM.Name))
   deriving (Show, Eq)
 
@@ -185,8 +194,8 @@ staticString name str = do
 llvmName :: Text -> LLVM.Name
 llvmName = LLVM.mkName . Text.unpack
 
-literalToLLVM :: LLVMIR.MonadIRBuilder m => Literal -> m Result
-literalToLLVM = \case
+literalCodegen :: LLVMIR.MonadIRBuilder m => Literal -> m Result
+literalCodegen = \case
   LitInt x -> resultValue <$> LLVMIR.int64 (fromIntegral x)
   LitDouble x -> resultValue <$> LLVMIR.double x
   LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
@@ -201,18 +210,17 @@ literalToLLVM = \case
     _ <- LLVMIR.store byteDataPtr 0 byteDataOper
     byteDataPtr' <- LLVMIR.bitcast byteDataPtr (LLVM.ptr LLVM.i8)
     bytePtr <- LLVMIR.call RT.mallocRef [(lenOper, [])]
-    volOper <- LLVMIR.bit 0
-    _ <- LLVMIR.call RT.memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, [])] -- , (volOper, [])]
+    _ <- LLVMIR.call RT.memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, [])]
     str <- LLVMIR.call RT.stringNewRef [(lenOper, []), (bytePtr, [])]
     pure $ resultValue str
 
--- | Generates code for a binary operation
-binopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+-- | Generates code for an arbitrary binary operation
+binaryOpCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
       => m Result
       -> m Result
       -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
       -> m Result
-binopCodegen x y op = do
+binaryOpCodegen x y op = do
   x' <- joinPoint1 x
   y' <- joinPoint1 y
   res <- op x' y'
@@ -229,17 +237,18 @@ numBinopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
 numBinopCodegen x y ty opDouble opInt =
   case unfix ty of
     TyNumber numTy ->
-      if numTy == NumInt then binopCodegen x y opInt
-                         else binopCodegen x y opDouble
+      if numTy == NumInt then binaryOpCodegen x y opInt
+                         else binaryOpCodegen x y opDouble
     _ -> error "Invariant violated"
 
-binopToLLVM :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+-- | Generates code for BinOp
+binOpCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
             => BinaryOp -- ^ Operation
             -> Type -- ^ Type of the inputs
             -> m Result
             -> m Result
             -> m Result
-binopToLLVM op ty x y =
+binOpCodegen op ty x y =
   let (floatInstr, intInstr) = case op of
         Add -> (LLVMIR.fadd, LLVMIR.add)
         Sub -> (LLVMIR.fsub, LLVMIR.sub)
@@ -250,14 +259,14 @@ binopToLLVM op ty x y =
         Equal -> ((LLVMIR.fcmp LLVMFP.OEQ), (LLVMIR.icmp LLVMIP.EQ))
   in numBinopCodegen x y ty floatInstr intInstr
 
-arithToLLVM :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
-arithToLLVM = para (go . annGetExpr)
+exprCodegen :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
+exprCodegen = para (go . annGetExpr)
   where
     go :: ExprF (TypedExpr, LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result)
        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
     go = \case
-      Lit l -> literalToLLVM l
-      BinOp op (ex, x) (_, y) -> binopToLLVM op (annGetAnn (unfix ex)) x y
+      Lit l -> literalCodegen l
+      BinOp op (ex, x) (_, y) -> binOpCodegen op (annGetAnn (unfix ex)) x y
       If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
         LLVMIR.ensureBlock
         cond <- joinPoint1 condInstr
@@ -318,8 +327,8 @@ arithToLLVM = para (go . annGetExpr)
               case unfix . annGetAnn . unfix $ valExpr of { TyAdt n -> Just n; _ -> Nothing }
         ctors <- asks ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
         let ctorNames = ctorGetName <$> ctors
-        let usedLabelTriples = filter ((`elem` ctorNames) . fst . snd) $ [0..] `zip` allCaseLabels
-        let jumpTable = (\(i, (_, l)) -> (LLVMC.Int 32 i, l)) <$> usedLabelTriples
+        let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
+        let jumpTable = [(LLVMC.Int 32 i, l) | (i, (_, l)) <- usedLabelTriples]
         tag <- LLVMIR.extractValue val [0]
         dataPtr <- LLVMIR.extractValue val [1]
         LLVMIR.switch tag defLabel jumpTable
@@ -360,7 +369,7 @@ arithToLLVM = para (go . annGetExpr)
         -- Assume that name is callable (e.g. either a static function or a
         -- function pointer)
         fn <- fromJust <$> lookupName name
-        resultValue <$> LLVMIR.call fn ((, []) <$> args)
+        resultValue <$> LLVMIR.call fn [(a, []) | a <- args]
       FunRef name -> do
         fn <- gets (fromJust . Map.lookup name . tableFuns)
         pure (resultValue fn)
@@ -369,7 +378,7 @@ arithToLLVM = para (go . annGetExpr)
               TyNumber n -> n
               _ -> error "codegen: attempting to cast non-numeric"
         expr <- joinPoint1 exprM
-        resultValue <$> castOp origNum num expr
+        resultValue <$> castOpCodegen origNum num expr
       Print (_, exprM) -> do
         let fmtStr = encodeUtf8 (fromString "Print: %s\n\0")
         let fmtStrLen = toInteger (BS.length fmtStr)
@@ -390,14 +399,16 @@ arithToLLVM = para (go . annGetExpr)
     lookupName name =
       gets $ \t ->
         Map.lookup name (tableVars t) <|> Map.lookup name (tableFuns t)
-    castOp :: LLVMIR.MonadIRBuilder m => Numeric -> Numeric -> LLVM.Operand -> m LLVM.Operand
-    castOp source castTo oper = case (source, castTo) of
-      (NumDouble, NumDouble) -> pure oper
-      (NumInt, NumInt) -> pure oper
-      (NumDouble, NumInt) -> LLVMIR.fptosi oper LLVM.i64
-      (NumInt, NumDouble) -> LLVMIR.sitofp oper LLVM.double
-      (NumUnknown, _) -> castOp NumDouble castTo oper
-      (_, NumUnknown) -> error "castOp: attempting to cast to NumUnknown"
+
+-- | Generates code for numeric casting
+castOpCodegen :: LLVMIR.MonadIRBuilder m => Numeric -> Numeric -> LLVM.Operand -> m LLVM.Operand
+castOpCodegen source castTo oper = case (source, castTo) of
+  (NumDouble, NumDouble) -> pure oper
+  (NumInt, NumInt) -> pure oper
+  (NumDouble, NumInt) -> LLVMIR.fptosi oper LLVM.i64
+  (NumInt, NumDouble) -> LLVMIR.sitofp oper LLVM.double
+  (NumUnknown, _) -> castOpCodegen NumDouble castTo oper
+  (_, NumUnknown) -> error "castOpCodegen: attempting to cast to NumUnknown"
 
 ctorToLLVM :: Constructor -> [LLVM.Type]
 ctorToLLVM (Ctor _ args) = typeToLLVM <$> args
@@ -411,7 +422,7 @@ typeToLLVM = go . unfix
         NumInt -> LLVM.i64
         NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
-      TyString -> LLVM.NamedTypeReference (LLVM.mkName "struct.simpl_string")
+      TyString -> RT.stringType
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
         LLVM.ptr $ LLVM.FunctionType
@@ -458,25 +469,17 @@ funToLLVM name params ty body =
              modify (\t -> t { tableCurrentJoin = endLabel
                              , tableFuns = Map.insert name foper (tableFuns t)
                              , tableVars = updVars t })
-             retval <- joinPoint1 (arithToLLVM body)
+             retval <- joinPoint1 (exprCodegen body)
              -- Restore old scope
              modify (\t -> t { tableVars = oldVars })
              LLVMIR.ret retval
            pure foper
 
-initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
-initCodegenTable symTab = do
-  let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
-  ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
-    forM ([0..] `zip` ctors) $ \(i, Ctor ctorName _) ->
-      pure (ctorName, (adtName, llvmName ctorName, i))
-  modify $ \t -> t { tableAdts = adts
-                   , tableCtors = Map.fromList (join ctors) }
-
-generateLLVM :: [Decl Expr]
+-- | Generate code for the entire module
+moduleCodegen :: [Decl Expr]
              -> SymbolTable TypedExpr
              -> LLVMIR.ModuleBuilderT Codegen ()
-generateLLVM decls symTab = mdo
+moduleCodegen decls symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
   (_, resultFmt) <- staticString ".resultformat" "Result: %i\n"
@@ -510,4 +513,4 @@ runCodegen decls symTab
   . flip evalStateT emptyCodegenTable
   . unCodegen
   . LLVMIR.buildModuleT "simpl.ll"
-  $ lift (initCodegenTable symTab) >> generateLLVM decls symTab
+  $ lift (initCodegenTable symTab) >> moduleCodegen decls symTab
