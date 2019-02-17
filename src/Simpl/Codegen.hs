@@ -588,8 +588,8 @@ generateLLVM decls symTab = mdo
     let mainTy = LLVM.ptr (LLVM.FunctionType LLVM.i64 [] False)
     let mainName = LLVM.mkName "__simpl_main"
     let mainRef = LLVM.ConstantOperand (LLVMC.GlobalReference mainTy mainName)
-    exprResult <- LLVMIR.call mainRef []
     _ <- LLVMIR.call printf [(exprSrc, [])]
+    exprResult <- LLVMIR.call mainRef []
     _ <- LLVMIR.call printf [(resultFmt, []), (exprResult, [])]
     retcode <- LLVMIR.int64 1
     LLVMIR.ret retcode

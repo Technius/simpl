@@ -1,78 +1,75 @@
 data Foo = Bar Double
-# 
-# data MaybeI = JustI Double | Nothing
-# 
-# fun not (b : Bool) : Bool := { if b then false else true }
-# 
-# fun and (p : Bool, q : Bool) : Bool := { if p then (if q then true else false) else false }
-# 
-# fun or (p : Bool, q : Bool) : Bool := { if p then true else (if q then true else false) }
-# 
-# fun factorial (x : Int) : Int := {
-#   if (x <= 0) then 1
-#   else x * @factorial(x - 1)
-# }
-# 
-# fun even (x: Int) : Bool := {
-#   if (x <= 0) then true
-#   else @not(@odd(x - 2))
-# }
-# 
-# fun odd (x: Int) : Bool := {
-#   if (x <= 1) then true
-#   else @not(@even(x - 2))
-# }
-# 
-# fun nested_ifs : Double := {
-#   (if true then (if true then 4.0 else 5.0) else (if false then 2.0 else 3.0) + 1.0) * 2.0
-# }
-# 
-# fun main : Int := {
-#   case JustI 10.0 of
-#     JustI x => (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf
-#     Nothing => let res = 4 in @double_me(res + 1)
-# }
-# 
-# fun asdf : Int := {
-#   (if false then 5 else 10) + 2
-# }
-# 
-# fun double_me (x : Int) : Int := { x * 2 }
-# 
-# fun foo : Foo := {
-#   Bar 5.0
-# }
-# 
-# fun foo2 : Bool := {
-#   case Bar 5.0 of
-#     Bar x => true
-# }
-# 
-# fun lots_of_lets : Double := {
-#   let x = if true then 1.0 else 2.0 in
-#   let y = if true then x * 2.0 else x * 2.0 + 1.0 in
-#   y
-# }
-# 
-# fun fun_ptr : Int -> Int := { &double_me }
-# 
-# fun fun_ptr_test (b : Bool) : Int := {
-#   let f = if b then &double_me else &factorial in
-#   @f(4)
-# }
-# 
-# fun cast_test_1 : Int := {
-#   (1 + 1) * (cast 2.0 as Int)
-# }
-# 
-# fun cast_test_2 : Int := {
-#   (1 * 1) + (cast 2.0 as Int)
-# }
 
-fun main : Int := {
-  println("Hello world!")
+data MaybeI = JustI Double | Nothing
+
+fun not (b : Bool) : Bool := { if b then false else true }
+
+fun and (p : Bool, q : Bool) : Bool := { if p then (if q then true else false) else false }
+
+fun or (p : Bool, q : Bool) : Bool := { if p then true else (if q then true else false) }
+
+fun factorial (x : Int) : Int := {
+  if (x <= 0) then 1
+  else x * @factorial(x - 1)
 }
 
-fun string_lit : String := {
-  "foo"
+fun even (x: Int) : Bool := {
+  if (x <= 0) then true
+  else @not(@odd(x - 2))
+}
+
+fun odd (x: Int) : Bool := {
+  if (x <= 1) then true
+  else @not(@even(x - 2))
+}
+
+fun nested_ifs : Double := {
+  (if true then (if true then 4.0 else 5.0) else (if false then 2.0 else 3.0) + 1.0) * 2.0
+}
+
+fun main : Int := {
+  case JustI 10.0 of
+    JustI x =>
+      let msg = println("In Just branch") in
+      (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf
+    Nothing =>
+      let msg = println("In Nothing branch") in
+      let res = 4 in
+      @double_me(res + 1)
+}
+
+fun asdf : Int := {
+  (if false then 5 else 10) + 2
+}
+
+fun double_me (x : Int) : Int := { x * 2 }
+
+fun foo : Foo := {
+  Bar 5.0
+}
+
+fun foo2 : Bool := {
+  case Bar 5.0 of
+    Bar x => true
+}
+
+fun lots_of_lets : Double := {
+  let x = if true then 1.0 else 2.0 in
+  let y = if true then x * 2.0 else x * 2.0 + 1.0 in
+  y
+}
+
+fun fun_ptr : Int -> Int := { &double_me }
+
+fun fun_ptr_test (b : Bool) : Int := {
+  let f = if b then &double_me else &factorial in
+  @f(4)
+}
+
+fun cast_test_1 : Int := {
+  (1 + 1) * (cast 2.0 as Int)
+}
+
+fun cast_test_2 : Int := {
+  (1 * 1) + (cast 2.0 as Int)
 }
