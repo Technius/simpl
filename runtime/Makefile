@@ -1,6 +1,6 @@
 compile: runtime.ll
 
-%.ll: %.c
+%.ll: %.c %.h
 	clang -S -emit-llvm $< -o $@
 
 clean:

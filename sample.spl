@@ -29,8 +29,13 @@ fun nested_ifs : Double := {
 
 fun main : Int := {
   case JustI 10.0 of
-    JustI x => (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf
-    Nothing => let res = 4 in @double_me(res + 1)
+    JustI x =>
+      let msg = println("In Just branch") in
+      (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf
+    Nothing =>
+      let msg = println("In Nothing branch") in
+      let res = 4 in
+      @double_me(res + 1)
 }
 
 fun asdf : Int := {

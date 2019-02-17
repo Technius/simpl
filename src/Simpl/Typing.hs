@@ -65,6 +65,7 @@ literalType = \case
   LitBool _ -> TyBool
   LitDouble _ -> TyNumber NumDouble
   LitInt _ -> TyNumber NumInt
+  LitString _ -> TyString
 
 -- | Annotate every AST node with a unification meta variable
 attachExprMetaVar :: Expr -> Typecheck TCExpr
@@ -171,6 +172,11 @@ inferType = cata $ \case
     ty' <- unifyTy ty (UTerm (TyNumber NumUnknown))
     let expr' = annotate (annGetExpr . unfix $ expr) ty'
     pure $ annotate (Cast expr' num) (UTerm (TyNumber num))
+  Print exprM -> do
+    expr <- exprM
+    let ty = extractTy expr
+    _ <- unifyTy ty (UTerm TyString)
+    pure $ annotate (Print expr) (UTerm (TyNumber NumInt))
   where
     annotate :: ExprF TCExpr -> UType -> TCExpr
     annotate expfTc ty = Fix $ AnnExprF ty expfTc
@@ -234,6 +240,7 @@ typeToUtype :: Type -> UType
 typeToUtype = cata $ \case
   TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
+  TyString -> UTerm TyString
   TyAdt n -> UTerm (TyAdt n)
   TyFun args res -> UTerm (TyFun args res)
 
