@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
-module Simpl.Analysis where
+module Simpl.SymbolTable where
 
 import Data.Functor.Foldable (Fix(Fix))
 import Data.List (find)

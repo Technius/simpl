@@ -9,9 +9,9 @@ import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
 import LLVM.Context
 
-import Simpl.Analysis
 import Simpl.Ast
 import Simpl.Codegen (runCodegen)
+import Simpl.SymbolTable
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
 import Paths_simpl_lang
 

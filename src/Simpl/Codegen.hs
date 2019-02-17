@@ -46,7 +46,7 @@ import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
 import Simpl.Ast
-import Simpl.Analysis
+import Simpl.SymbolTable
 import Simpl.Typing (TypedExpr)
 
 data CodegenTable =
