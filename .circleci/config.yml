@@ -1,0 +1,28 @@
+# Build steps adapted from
+# https://circleci.com/docs/2.0/language-haskell/ (Feb 19 2019)
+
+version: 2
+jobs:
+  build:
+    docker:
+      - image: ubuntu:18.04
+
+    steps:
+      - checkout
+      - run:
+          name: Hello world
+          command: echo Hello world
+#      - restore_cache:
+#          name: Restore cached dependencies
+#          keys:
+#            - simpl-circleci-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+#      - run:
+#          name: Compile
+#          command: stack build
+#      - save_cache:
+#          name: Cache dependencies
+#          keys:
+#            - simpl-circleci-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+#          paths:
+#            - ".stack"
+#            - ".stack-work"
