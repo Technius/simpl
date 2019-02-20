@@ -83,8 +83,8 @@ stringType :: LLVM.Type
 stringType = runtimeStruct "simpl_string"
 
 stringCstringType, stringNewType :: FunType
-stringCstringType = mkFunType [("str", stringType)] (LLVM.ptr LLVM.i8)
-stringNewType = mkFunType [("byte_count", LLVM.i64), ("data", LLVM.ptr LLVM.i8)] stringType
+stringCstringType = mkFunType [("str", LLVM.ptr stringType)] (LLVM.ptr LLVM.i8)
+stringNewType = mkFunType [("byte_count", LLVM.i64), ("data", LLVM.ptr LLVM.i8)] (LLVM.ptr stringType)
 
 stringCstringRef, stringNewRef :: LLVM.Operand
 stringCstringRef = runtimeFunRef "simpl_string_cstring" stringCstringType

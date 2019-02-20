@@ -422,7 +422,7 @@ typeToLLVM = go . unfix
         NumInt -> LLVM.i64
         NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
-      TyString -> RT.stringType
+      TyString -> LLVM.ptr RT.stringType
       TyAdt name -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
         LLVM.ptr $ LLVM.FunctionType

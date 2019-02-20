@@ -12,24 +12,24 @@ struct simpl_string {
   char* data;
 };
 
-struct simpl_string simpl_string_new(size_t byte_count, char* data);
+struct simpl_string* simpl_string_new(size_t byte_count, char* data);
 
 /**
  * Returns an immutable slice of the suffix of the given string.
  */
-struct simpl_string simpl_string_slice(struct simpl_string* s, size_t begin, size_t end);
+struct simpl_string* simpl_string_slice(struct simpl_string* s, size_t begin, size_t end);
 
 /**
  * Constructs a simpl_string from a null terminated C string. The data is copied
  * from the C string.
  */
-struct simpl_string simpl_from_cstring(char* cstring);
+struct simpl_string* simpl_from_cstring(char* cstring);
 
 /**
  * Constructs a C string from a simpl_string.
  */
-char* simpl_string_cstring(const struct simpl_string s);
+char* simpl_string_cstring(const struct simpl_string* s);
 
-int simpl_string_print(struct simpl_string* s);
+int simpl_string_print(const struct simpl_string* s);
 
 #endif
