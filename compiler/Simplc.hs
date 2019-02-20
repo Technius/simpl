@@ -27,6 +27,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Text.Megaparsec (runParser, parseErrorPretty')
 import System.Exit (exitFailure)
+import System.IO (stderr)
 
 -- | Monad for handling CLI
 newtype CliM a = CliM { unCliM :: ReaderT Cli.CliCmd (ExceptT [String] IO) a }
@@ -65,12 +66,14 @@ codegen srcFile@(SourceFile _ decls) =
       liftIO $ putStrLn "Running compiler pipeline"
       let pipeline = ExceptT (fullCompilerPipeline srcFile)
       programAst <- CliM . lift $ withExceptT (pure . ("Error: " ++) . show) pipeline
+      dumpIR <- asks Cli.dumpIR
       handleExceptions . liftIO $
         withContext $ \cr ->
           buildRuntime cr $ \runtimeMod ->
             buildModule programAst $ \programMod -> do
               linkModules programMod runtimeMod
-              moduleLLVMAssembly programMod >>= B.putStr
+              when dumpIR $
+                moduleLLVMAssembly programMod >>= B.hPutStr stderr
               outputModule programMod
     _ -> throwError $ ["No main function found"]
   where

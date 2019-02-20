@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
-export FILENAME="sample"
+COMPILER_ARGS="$@"
+FILENAME="sample"
 stack build --fast
-stack exec simplc -- "$FILENAME.spl"
+stack exec simplc -- "$FILENAME.spl" $COMPILER_ARGS
 clang "$FILENAME.o" -o "$FILENAME"
 ./$FILENAME
