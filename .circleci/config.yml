@@ -14,15 +14,15 @@ jobs:
           command: echo Hello world
       - restore_cache:
           name: Restore cached dependencies
-          keys:
-            - simpl-circleci-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+          key:
+            - stack-cache-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
       - run:
           name: Compile
           command: stack build
       - save_cache:
           name: Cache dependencies
-          keys:
-            - simpl-circleci-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+          key:
+            - stack-cache-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
           paths:
             - ".stack"
             - ".stack-work"
