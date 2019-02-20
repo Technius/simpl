@@ -9,18 +9,21 @@ jobs:
 
     steps:
       - checkout
-      - run:
-          name: Hello world
-          command: echo Hello world
       - restore_cache:
           name: Restore cached dependencies
-          key: stack-cache-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+          key: stack-cache-v1-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+      - run:
+          name: Setup GHC
+          command: stack setup
       - run:
           name: Compile
           command: stack build
+      - run:
+          name: Run unit tests
+          command: stack test
       - save_cache:
           name: Cache dependencies
-          key: stack-cache-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
+          key: stack-cache-v1-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
           paths:
-            - ".stack"
+            - "~/.stack"
             - ".stack-work"
