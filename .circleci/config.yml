@@ -16,7 +16,7 @@ jobs:
           name: Restore cached dependencies
           keys:
             - simpl-circleci-{{ checksum "package.yaml" }}-{{ checksum "stack.yaml" }}
-#      - run:
+      - run:
           name: Compile
           command: stack build
       - save_cache:
