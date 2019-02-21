@@ -1,14 +1,18 @@
-#include <string.h>
-#include <stdint.h>
-#include <assert.h>
-#include <stdlib.h>
 #include "runtime.h"
 
+#include <string.h>
+#include <assert.h>
+#include <stdlib.h>
 #include <stdio.h>
+#include "gc.h"
+
+void* simpl_malloc(size_t size) {
+  return GC_MALLOC(size);
+}
 
 inline struct simpl_string* simpl_string_new(size_t byte_count, char* data) {
-  struct simpl_string* s = (struct simpl_string*) malloc(byte_count);
-  *s =  (struct simpl_string) {
+  struct simpl_string* s = simpl_malloc(byte_count);
+  *s = (struct simpl_string) {
     .byte_count = byte_count,
     .data = data
   };
@@ -23,7 +27,7 @@ struct simpl_string* simpl_string_slice(struct simpl_string* s, size_t begin, si
 
 struct simpl_string* simpl_from_cstring(char* cstring) {
   size_t len = strlen(cstring);
-  char* data = malloc(len);
+  char* data = simpl_malloc(len);
   memcpy(data, cstring, len);
   return simpl_string_new(len, data);
 }

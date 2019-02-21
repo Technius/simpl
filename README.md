@@ -24,6 +24,13 @@ LLVM 7 and clang 7 must be installed.
 To compile, run `stack build`. When developing, use the `--fast` flag. A
 `test.sh` script is provided to quickly test compilation.
 
+## Usage
+
+The SimPL runtime currently uses the
+[`boehm-gc`](https://github.com/ivmai/bdwgc) garbage collector to handle heap
+allocations. When linking object files created by `simplc`, make sure that you
+link `libgc` as well.
+
 ## License
 
 Copyright 2018-2019 Bryan Tan ("Technius")

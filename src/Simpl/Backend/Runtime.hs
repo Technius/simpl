@@ -68,12 +68,12 @@ memcpyType = mkFunType [ ("dest", LLVM.ptr LLVM.i8)
 printfType = ([("", LLVM.ptr LLVM.i8)], LLVM.void, True)
 
 mallocRef, memcpyRef, printfRef :: LLVM.Operand
-mallocRef = runtimeFunRef "malloc" mallocType
+mallocRef = runtimeFunRef "simpl_malloc" mallocType
 memcpyRef = runtimeFunRef "memcpy" memcpyType
 printfRef = runtimeFunRef "printf" printfType
 
 cstdlibFuns :: [(String, FunType)]
-cstdlibFuns = [ ("malloc", mallocType)
+cstdlibFuns = [ ("simpl_malloc", mallocType)
               , ("memcpy", memcpyType)
               , ("printf", printfType) ]
 

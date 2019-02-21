@@ -1,7 +1,13 @@
-#include <stdint.h>
+#include <stdlib.h>
 
 #ifndef RUNTIME_H
 #define RUNTIME_H
+
+/**
+ * Allocates num bytes according to the allocation strategy. This should be
+ * called whenever heap memory needs to be allocated in the runtime.
+ */
+inline void* simpl_malloc(size_t size);
 
 /**
  * An immutable UTF-8 string, as used in SimPL. All data in the string should be

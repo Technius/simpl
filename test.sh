@@ -4,5 +4,6 @@ COMPILER_ARGS="$@"
 FILENAME="sample"
 stack build --fast
 stack exec simplc -- "$FILENAME.spl" $COMPILER_ARGS
-clang "$FILENAME.o" -o "$FILENAME"
+make -C runtime libgc.a
+clang -pthread "$FILENAME.o" runtime/libgc.a -o "$FILENAME"
 ./$FILENAME

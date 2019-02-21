@@ -3,3 +3,4 @@ simpl-lang.cabal
 /*.o
 /sample
 /runtime/**/*.ll
+/runtime/libgc.a
