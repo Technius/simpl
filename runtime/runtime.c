@@ -11,7 +11,7 @@ void* simpl_malloc(size_t size) {
 }
 
 inline struct simpl_string* simpl_string_new(size_t byte_count, char* data) {
-  struct simpl_string* s = simpl_malloc(byte_count);
+  struct simpl_string* s = simpl_malloc(sizeof(struct simpl_string));
   *s = (struct simpl_string) {
     .byte_count = byte_count,
     .data = data
