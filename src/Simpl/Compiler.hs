@@ -11,6 +11,7 @@ import LLVM.Context
 
 import Simpl.Ast
 import Simpl.Backend.Codegen (runCodegen)
+import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
 import Paths_simpl_lang
@@ -44,12 +45,12 @@ buildRuntime ctx cont = do
   LLVMM.withModuleFromLLVMAssembly ctx (LLVMM.File runtimeSourcePath) cont
 
 -- | Compiles a SimPL source file
-fullCompilerPipeline :: SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
-fullCompilerPipeline srcFile@(SourceFile _name decls) =
+fullCompilerPipeline :: CompilerOpts -> SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
+fullCompilerPipeline options srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
     symTable <- get
     let tycheckFuns (params, ty, expr) = (params, ty, withExtraVars params (checkType ty expr))
     let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns symTable
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)
-    pure $ runCodegen decls typedSymTable
+    pure $ runCodegen options decls typedSymTable

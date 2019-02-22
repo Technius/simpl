@@ -14,6 +14,7 @@ import Control.Monad.Reader
 import Data.List (find)
 import Simpl.Ast
 import Simpl.Compiler
+import Simpl.CompilerOptions
 import qualified Simpl.Cli as Cli
 import qualified Simpl.Parser as Parser
 import LLVM.Target (withHostTargetMachine)
@@ -63,8 +64,10 @@ codegen :: SourceFile Expr -> CliM ()
 codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
     Just _ -> do
+      compilerOpts <- asks $ \cliOpts -> defaultCompilerOpts
+            { enableDiagnostics = Cli.enableDiagnostics cliOpts }
       liftIO $ putStrLn "Running compiler pipeline"
-      let pipeline = ExceptT (fullCompilerPipeline srcFile)
+      let pipeline = ExceptT (fullCompilerPipeline compilerOpts srcFile)
       programAst <- CliM . lift $ withExceptT (pure . ("Error: " ++) . show) pipeline
       dumpIR <- asks Cli.dumpIR
       handleExceptions . liftIO $

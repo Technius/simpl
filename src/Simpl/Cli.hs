@@ -4,9 +4,14 @@ module Simpl.Cli where
 import Options.Applicative
 
 data CliCmd
-  = Compile { fileName :: String -- ^ Name of the source file
-            , target :: Target   -- ^ Compilation target
-            , dumpIR :: Bool     -- ^ Whether the LLVM IR should be printed on stderr
+  = Compile { -- | Name of the source file
+              fileName :: String
+              -- | Compilation target
+            , target :: Target
+              -- | Whether the LLVM IR should be printed on stderr
+            , dumpIR :: Bool
+              -- | Whether diagnostics should be printed at runtime
+            , enableDiagnostics :: Bool
             }
     deriving (Show)
 
@@ -27,6 +32,7 @@ compileCommand = Compile <$>
   strArgument (metavar "file_name")
   <*> option targetReader (short 'T' <> long "target" <> value NativeTarget)
   <*> switch (long "dump-ir")
+  <*> switch (long "diagnostics")
 
 runCliParser :: IO CliCmd
 runCliParser = execParser cliProgram

@@ -46,6 +46,7 @@ import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
 import Simpl.Ast
+import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (TypedExpr)
 import Simpl.Backend.Runtime ()
@@ -57,7 +58,8 @@ data CodegenTable =
                  , tableAdts :: Map Text (LLVM.Name, Type, [Constructor])
                  , tableFuns :: Map Text LLVM.Operand
                  , tableCurrentJoin :: LLVM.Name
-                 , tablePrintf :: LLVM.Operand }
+                 , tablePrintf :: LLVM.Operand
+                 , tableOptions :: CompilerOpts }
   deriving (Show)
 
 -- | An empty codegen table. This will cause a crash if codegen is run when not
@@ -69,7 +71,8 @@ emptyCodegenTable =
                  , tableAdts = Map.empty
                  , tableFuns = Map.empty
                  , tableCurrentJoin = LLVM.mkName "__default_join_point"
-                 , tablePrintf = error "printf not set" }
+                 , tablePrintf = error "printf not set"
+                 , tableOptions = defaultCompilerOpts }
 
 newtype CodegenT m a =
   CodegenT { unCodegen :: StateT CodegenTable m a }
@@ -94,14 +97,15 @@ instance Monad m => MonadReader CodegenTable (CodegenT m) where
     put curTable
     pure result
 
-initCodegenTable :: SymbolTable TypedExpr -> Codegen ()
-initCodegenTable symTab = do
+initCodegenTable :: CompilerOpts -> SymbolTable TypedExpr -> Codegen ()
+initCodegenTable options symTab = do
   let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
   ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
     forM ([0..] `zip` ctors) $ \(i, Ctor ctorName _) ->
       pure (ctorName, (adtName, llvmName ctorName, i))
   modify $ \t -> t { tableAdts = adts
-                   , tableCtors = Map.fromList (join ctors) }
+                   , tableCtors = Map.fromList (join ctors)
+                   , tableOptions = options }
 
 data Result = Values (NonEmpty LLVM.Operand) | Branching (NonEmpty (LLVM.Operand, LLVM.Name))
   deriving (Show, Eq)
@@ -496,21 +500,22 @@ moduleCodegen decls symTab = mdo
     (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
-    _ <- LLVMIR.call RT.printfRef [(msg, [])]
+    diagnosticsEnabled <- gets (enableDiagnostics . tableOptions)
+    when diagnosticsEnabled $ LLVMIR.call RT.printfRef [(msg, [])] >> pure ()
     let mainTy = LLVM.ptr (LLVM.FunctionType LLVM.i64 [] False)
     let mainName = LLVM.mkName "__simpl_main"
     let mainRef = LLVM.ConstantOperand (LLVMC.GlobalReference mainTy mainName)
-    _ <- LLVMIR.call RT.printfRef [(exprSrc, [])]
+    when diagnosticsEnabled $ LLVMIR.call RT.printfRef [(exprSrc, [])] >> pure ()
     exprResult <- LLVMIR.call mainRef []
-    _ <- LLVMIR.call RT.printfRef [(resultFmt, []), (exprResult, [])]
+    when diagnosticsEnabled $ LLVMIR.call RT.printfRef [(resultFmt, []), (exprResult, [])] >> pure ()
     retcode <- LLVMIR.int64 1
     LLVMIR.ret retcode
   pure ()
 
-runCodegen :: [Decl Expr] -> SymbolTable TypedExpr -> LLVM.Module
-runCodegen decls symTab
+runCodegen :: CompilerOpts -> [Decl Expr] -> SymbolTable TypedExpr -> LLVM.Module
+runCodegen opts decls symTab
   = runIdentity
   . flip evalStateT emptyCodegenTable
   . unCodegen
   . LLVMIR.buildModuleT "simpl.ll"
-  $ lift (initCodegenTable symTab) >> moduleCodegen decls symTab
+  $ lift (initCodegenTable opts symTab) >> moduleCodegen decls symTab
