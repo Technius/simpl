@@ -1,8 +1,11 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 -- Vinyl stuff
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -22,6 +25,8 @@ Downen, and Simon Peyton Jones (PLDI '17).
 module Simpl.JoinIR where
 
 import Data.Text (Text)
+import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))
+import qualified Data.Text.Prettyprint.Doc as PP
 import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type, TypeF(..))
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
@@ -38,7 +43,7 @@ data Callable
   | CBinOp !BinaryOp -- ^ Binary operator
   | CCast !Numeric -- ^ Numeric cast
   | CCtor !Name -- ^ ADT constructor
-  | CPrint !Name -- ^ Print string (temporary)
+  | CPrint -- ^ Print string (temporary)
   deriving (Show)
 
 -- | A value
@@ -91,6 +96,50 @@ $(deriveShow1 ''Joinable)
 $(deriveShow1 ''JExprF)
 
 type JExpr = Fix JExprF
+
+instance Pretty Callable where
+  pretty = \case
+    CFunc name -> pretty name
+    CBinOp op -> pretty op
+    CCast num -> "cast[" <> pretty num <> "]"
+    CCtor name -> pretty name
+    CPrint -> "print"
+
+instance Pretty JValue where
+  pretty = \case
+    JVar n -> pretty n
+    JLit l -> pretty l
+
+instance Pretty a => Pretty (JBranch a) where
+  pretty (BrAdt ctorName varNames expr) =
+    PP.hang 2 $ PP.hsep (pretty <$> brPart) <> PP.softline <> pretty expr
+    where brPart = [ctorName] ++ varNames ++ ["=>"]
+
+instance Pretty a => Pretty (Joinable a) where
+  pretty = \case
+    JIf guard trueBr falseBr ->
+      PP.hang 2 $ "if" <+> pretty guard <+> PP.group (
+        "then" <> PP.softline <> pretty trueBr <> PP.softline
+        <> "else" <> PP.softline <> pretty falseBr)
+    JCase expr brs ->
+      PP.hang 2 $ "case" <+> pretty expr <+> "of" <> PP.hardline <>
+      (PP.vsep $ pretty <$> brs)
+
+instance Pretty JExpr where
+  pretty = f . unfix
+    where
+      f :: JExprF JExpr -> PP.Doc ann
+      f = \case
+        JVal v -> pretty v
+        JLet n v -> PP.hsep ["let", pretty n, "=", pretty v]
+        JJoin lbl n joinbl next -> PP.align $
+          PP.hang 2 (PP.hsep ["join", pretty lbl, "bind", pretty n, "="]
+                     <> PP.softline <> pretty joinbl)
+          <> PP.hardline <> "in" <+> pretty next
+        JJump lbl v -> PP.hsep ["jump", pretty lbl, "with", pretty v]
+        JApp name clbl args next ->
+          PP.hsep (["let app", pretty name, "=", pretty clbl] ++ (pretty <$> args))
+          <> PP.hardline <> pretty next
 
 -- * Annotated [JExpr]s
 --
