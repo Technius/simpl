@@ -3,6 +3,13 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+-- Vinyl stuff
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeOperators #-}
 
 {-|
 Module      : Simpl.JoinIR
@@ -15,9 +22,11 @@ Downen, and Simon Peyton Jones (PLDI '17).
 module Simpl.JoinIR where
 
 import Data.Text (Text)
-import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..))
+import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type, TypeF(..))
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
+import qualified Data.Vinyl as V
+import Data.Singletons.TH (genSingletons)
 
 type Name = Text
 
@@ -83,6 +92,53 @@ $(deriveShow1 ''JExprF)
 
 type JExpr = Fix JExprF
 
+-- * Annotated [JExpr]s
+--
+-- Because it's possible to have many different annotations on a single AST, we
+-- define a "single" annotated AST that is annotated with an extensible record
+-- type at each node. Thus, we can add annotations by extending the record with
+-- more fields.
+
+-- | Possible annotations on a [JExpr]
+data JFields = ExprType deriving (Show)
+
+genSingletons [ ''JFields ]
+
+-- | Maps each possible annotation label to a type
+type family ElF (f :: JFields) :: * where
+  ElF 'ExprType = Type
+
+-- | Wrapper for annotation fields
+newtype Attr f = Attr { _unAttr :: ElF f }
+
+-- | Helper function for create annotation fields
+(=::) :: sing f -> ElF f -> Attr f
+_ =:: x = Attr x
+
+-- | Annotations for a typed [JExpr]
+type Typed = '[ 'ExprType ]
+
+-- | Creates a type field whose value is the given type
+withType :: Type -> Attr 'ExprType
+withType ty = SExprType =:: ty
+
+-- | A [JExprF] annotated with some data.
+data AnnExprF fields a = AnnExprF { annGetAnn :: V.Rec Attr fields, annGetExpr :: JExprF a }
+  deriving (Show, Functor, Foldable, Traversable)
+
+type AnnExpr fields = Fix (AnnExprF fields)
+
+-- | Converts a [JExprF] to an "unannotated" [AnnExprF]
+toAnnExprF :: JExprF a -> AnnExprF '[] a
+toAnnExprF expr = AnnExprF { annGetAnn = V.RNil, annGetExpr = expr }
+
+-- | Adds the given annotation to the expression
+addField :: Attr f -> AnnExprF flds a -> AnnExprF (f ': flds) a
+addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
+
+exampleAnnotation :: V.Rec Attr '[ 'ExprType ]
+exampleAnnotation = (SExprType =:: Fix (TyNumber NumInt)) V.:& V.RNil
+
 exampleJExpr :: JExpr
 exampleJExpr = Fix $
   JJoin "label" "myvar" ifE (Fix (JVal (JVar "myvar")))
@@ -91,3 +147,18 @@ exampleJExpr = Fix $
       JIf (JLit (LitInt 5))
           (Fix (JJump "label" (JLit (LitInt 10))))
           (Fix (JJump "label" (JLit (LitInt 5))))
+
+exampleTypedJExpr :: AnnExpr '[ 'ExprType ]
+exampleTypedJExpr = Fix $ AnnExprF
+  { annGetAnn = withType tyInt V.:& V.RNil
+  , annGetExpr = JJoin "label" "myvar" ifE varE  }
+  where
+    tyInt = Fix (TyNumber NumInt)
+    varE = Fix $ AnnExprF
+      { annGetAnn = withType tyInt V.:& V.RNil
+      , annGetExpr = JVal (JVar "myvar") }
+    ifE =
+      JIf (JLit (LitInt 5)) (jmpE 10) (jmpE 5)
+    jmpE v = Fix $ AnnExprF
+      { annGetAnn = withType tyInt V.:& V.RNil
+      , annGetExpr = JJump "label" (JLit (LitInt v)) }

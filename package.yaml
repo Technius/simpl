@@ -45,6 +45,8 @@ dependencies:
 - bytestring
 - optparse-applicative
 - safe-exceptions
+- vinyl
+- singletons
 
 ghc-options:
 - -Wall
