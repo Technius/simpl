@@ -1,3 +1,5 @@
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -13,6 +15,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeApplications #-}
 
 {-|
 Module      : Simpl.JoinIR
@@ -31,6 +34,7 @@ import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type, TypeF(..))
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
 import qualified Data.Vinyl as V
+import qualified Data.Vinyl.TypeLevel as V
 import Data.Singletons.TH (genSingletons)
 
 type Name = Text
@@ -160,6 +164,8 @@ type family ElF (f :: JFields) :: * where
 -- | Wrapper for annotation fields
 newtype Attr f = Attr { _unAttr :: ElF f }
 
+deriving instance Show (Attr 'ExprType)
+
 -- | Helper function for create annotation fields
 (=::) :: sing f -> ElF f -> Attr f
 _ =:: x = Attr x
@@ -173,7 +179,7 @@ withType ty = SExprType =:: ty
 
 -- | A [JExprF] annotated with some data.
 data AnnExprF fields a = AnnExprF { annGetAnn :: V.Rec Attr fields, annGetExpr :: JExprF a }
-  deriving (Show, Functor, Foldable, Traversable)
+  deriving (Functor, Foldable, Traversable)
 
 type AnnExpr fields = Fix (AnnExprF fields)
 
@@ -184,6 +190,10 @@ toAnnExprF expr = AnnExprF { annGetAnn = V.RNil, annGetExpr = expr }
 -- | Adds the given annotation to the expression
 addField :: Attr f -> AnnExprF flds a -> AnnExprF (f ': flds) a
 addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
+
+-- | Retrieves the type information stored in a typed [AnnExprF]
+getType :: V.RElem 'ExprType fields (V.RIndex 'ExprType fields) => AnnExprF fields a -> Type
+getType = _unAttr . V.rget @'ExprType . annGetAnn
 
 exampleAnnotation :: V.Rec Attr '[ 'ExprType ]
 exampleAnnotation = (SExprType =:: Fix (TyNumber NumInt)) V.:& V.RNil
