@@ -11,7 +11,6 @@
 -- Vinyl stuff
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
@@ -187,6 +186,10 @@ type AnnExpr fields = Fix (AnnExprF fields)
 toAnnExprF :: JExprF a -> AnnExprF '[] a
 toAnnExprF expr = AnnExprF { annGetAnn = V.RNil, annGetExpr = expr }
 
+-- | Removes all annotations from an [AnnExpr]
+unannotate :: AnnExpr fields -> JExpr
+unannotate = cata (Fix . annGetExpr)
+
 -- | Adds the given annotation to the expression
 addField :: Attr f -> AnnExprF flds a -> AnnExprF (f ': flds) a
 addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
@@ -194,6 +197,18 @@ addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
 -- | Retrieves the type information stored in a typed [AnnExprF]
 getType :: V.RElem 'ExprType fields (V.RIndex 'ExprType fields) => AnnExprF fields a -> Type
 getType = _unAttr . V.rget @'ExprType . annGetAnn
+
+-- * Misc
+
+-- | Helper for inspecting an [AnnExpr]
+newtype PrettyJExprF a = PrettyJExprF (String, JExprF a) deriving (Show)
+type PrettyJExpr = Fix PrettyJExprF
+$(deriveShow1 ''PrettyJExprF)
+
+-- | Converts an [AnnExpr] into a [PrettyJExpr] so that it can be shown.
+prettyAnnExpr :: Show (V.Rec Attr fields) => AnnExpr fields -> PrettyJExpr
+prettyAnnExpr = cata $ \expr ->
+  Fix (PrettyJExprF (show (annGetAnn expr), annGetExpr expr))
 
 exampleAnnotation :: V.Rec Attr '[ 'ExprType ]
 exampleAnnotation = (SExprType =:: Fix (TyNumber NumInt)) V.:& V.RNil
