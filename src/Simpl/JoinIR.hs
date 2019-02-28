@@ -80,7 +80,7 @@ data JExprF a
   = JVal !JValue
 
   -- | A value binding
-  | JLet !Name !JValue
+  | JLet !Name !JValue !a
 
   -- | A join point. Consists of a label, the variable representing the joined
   -- value, the expression to join, and the next expression.
@@ -134,7 +134,7 @@ instance Pretty JExpr where
       f :: JExprF JExpr -> PP.Doc ann
       f = \case
         JVal v -> pretty v
-        JLet n v -> PP.hsep ["let", pretty n, "=", pretty v]
+        JLet n v next -> PP.hsep ["let", pretty n, "=", pretty v, "in"] <> PP.softline <> pretty next
         JJoin lbl n joinbl next -> PP.align $
           PP.hang 2 (PP.hsep ["join", pretty lbl, "bind", pretty n, "="]
                      <> PP.softline <> pretty joinbl)
