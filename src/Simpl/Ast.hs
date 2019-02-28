@@ -243,6 +243,11 @@ isComplexType = \case
   TyFun _ _ -> True
   _ -> False
 
+functionTypeResult :: Type -> Type
+functionTypeResult (Fix ty) = case ty of
+  TyFun _ res -> functionTypeResult res
+  _ -> Fix ty
+
 instance Pretty Type where
   pretty = para go
     where
