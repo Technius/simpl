@@ -61,6 +61,14 @@ data JBranch a
   = BrAdt Name [Name] !a -- ^ Destructure algebraic data type
   deriving (Functor, Foldable, Traversable, Show)
 
+branchGetExpr :: JBranch a -> a
+branchGetExpr = \case
+  BrAdt _ _ e -> e
+
+branchGetBindings :: JBranch a -> [Text]
+branchGetBindings = \case
+  BrAdt _ vars _ -> vars
+
 
 -- | Represents expressions that must be bound to a join point.
 data Joinable a
@@ -91,7 +99,7 @@ data JExprF a
 
   -- | Apply the callable to the arguments, bind the result to the given name,
   -- and continue to the next expression.
-  | JApp !Name !Callable ![Name] !a
+  | JApp !Name !Callable ![JValue] !a
   deriving (Functor, Foldable, Traversable, Show)
 
 $(deriveShow1 ''JBranch)
