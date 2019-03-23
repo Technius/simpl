@@ -108,6 +108,14 @@ $(deriveShow1 ''JExprF)
 
 type JExpr = Fix JExprF
 
+jexprGetVal :: JExprF a -> JValue
+jexprGetVal = \case
+  JVal v -> v
+  JLet n _ _ -> JVar n
+  JJoin _ n _ _ -> JVar n
+  JJump _ v -> v
+  JApp n _ _ _ -> JVar n
+
 instance Pretty Callable where
   pretty = \case
     CFunc name -> pretty name
