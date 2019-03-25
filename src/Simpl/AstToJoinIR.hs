@@ -6,6 +6,7 @@ module Simpl.AstToJoinIR
   ) where
 
 import Data.Functor.Foldable (Fix(..), para, unfix)
+import Data.Text (Text)
 
 import Simpl.Ast (Type, TypeF(..))
 import qualified Simpl.Ast as A
@@ -18,6 +19,13 @@ makeJexpr ty = Fix . J.addField (J.withType ty) . J.toAnnExprF
 
 astType :: A.AnnExpr Type -> Type
 astType = A.annGetAnn . unfix
+
+transformBranch :: Text -- ^ Return label
+                -> A.Branch (A.AnnExpr Type) -- ^ Branches
+                -> J.JBranch (J.AnnExpr '[ 'J.ExprType])
+transformBranch retLabel (A.BrAdt adtName argNames expr) =
+  let jexpr = anfTransform expr (makeJexpr (astType expr) . J.JJump retLabel) in
+    J.BrAdt adtName argNames jexpr
 
 anfTransform :: A.AnnExpr Type
              -> (J.JValue -> J.AnnExpr '[ 'J.ExprType])
@@ -42,8 +50,39 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
         let trueBr' = anfTransform trueBr (makeJexpr (astType trueBr) . J.JJump lbl)
             falseBr' = anfTransform falseBr (makeJexpr (astType falseBr) . J.JJump lbl) in
         J.JJoin lbl name (J.JIf jguard trueBr' falseBr') (cont (J.JVar name))
+  A.Case branches expr ->
+    anfTransform expr $ \jexpr ->
+      let lbl = "TODO"
+          name = "TODO"
+          jbranches = [transformBranch lbl b | b <- branches] in
+      makeJexpr ty (J.JJoin lbl name (J.JCase jexpr jbranches) (cont (J.JVar name)))
   A.Cons ctorName args ->
-    let argVals = [] -- TODO
-        varName = "TODO" in
+    let varName = "TODO" in
+    collectArgs args [] $ \argVals ->
       makeJexpr ty $
           J.JApp varName (J.CCtor ctorName) argVals (cont (J.JVar varName))
+  A.App funcName args ->
+    let varName = "TODO" in
+    collectArgs args [] $ \argVals ->
+      makeJexpr ty $
+        J.JApp varName (J.CFunc funcName) argVals (cont (J.JVar varName))
+  A.Cast expr numTy ->
+    let varName = "TODO" in
+      anfTransform expr $ \jexpr ->
+        makeJexpr ty $
+          J.JApp varName (J.CCast numTy) [jexpr] (cont (J.JVar varName))
+  A.Print expr ->
+    let varName = "TODO" in
+      anfTransform expr $ \jexpr ->
+        makeJexpr ty $
+          J.JApp varName J.CPrint [jexpr] (cont (J.JVar varName))
+  A.FunRef name -> _
+
+-- | Normalize each expression in sequential order, and then run the
+-- continuation with the expression values.
+collectArgs :: [A.AnnExpr Type]
+            -> [J.JValue]
+            -> ([J.JValue] -> J.AnnExpr '[ 'J.ExprType])
+            -> J.AnnExpr '[ 'J.ExprType]
+collectArgs [] vals mcont = mcont (reverse vals)
+collectArgs (x:xs) vals mcont = anfTransform x $ \v -> collectArgs xs (v:vals) mcont
