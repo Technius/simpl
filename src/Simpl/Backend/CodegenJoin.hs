@@ -20,7 +20,6 @@ import Control.Monad (forM, forM_)
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Functor.Foldable (unfix, Fix(..))
-import Data.Text.Prettyprint.Doc (pretty)
 import Data.Char (ord)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -45,7 +44,7 @@ import qualified LLVM.IRBuilder.Monad as LLVMIR
 import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
-import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..), Decl(..))
+import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (literalType)
@@ -100,7 +99,6 @@ localCodegenTable f ma = do
   modify $ \t -> t
     { tableVars = tableVars oldTable
     , tableFuns = tableFuns oldTable
-    , tableJoinValues = tableJoinValues oldTable
     }
   pure res
 
@@ -383,11 +381,13 @@ jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
         llvmLabel <- LLVMIR.freshName (fromString (Text.unpack lbl))
         let addJoinEntry = \t ->
               t { tableJoinValues = Map.insert lbl (llvmLabel, []) (tableJoinValues t) }
+        oldJoinEntries <- gets tableJoinValues
         _ <- localCodegenTable addJoinEntry (joinableCodegen joinable)
         (_, joinValues) <- gets (fromJust . Map.lookup lbl . tableJoinValues)
+        modify (\t -> t { tableJoinValues = oldJoinEntries })
         LLVMIR.emitBlockStart llvmLabel
         op <- LLVMIR.phi joinValues
-        modify (\t -> t { tableVars = Map.insert varName (exprTy, op) (tableVars t) })
+        bindVariable varName exprTy op
         jexprCodegen next
       JJump lbl val -> do
         v <- jvalueCodegen val
@@ -396,6 +396,8 @@ jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
         let f = (\(n, jvs) -> Just (n, (v, block) : jvs))
         let updJvals = Map.update f lbl jvals
         modify (\t -> t { tableJoinValues = updJvals })
+        llvmLabel <- gets (fst . fromJust . Map.lookup lbl . tableJoinValues)
+        LLVMIR.br llvmLabel
         pure v
       JApp varName callable args next -> do
         oper <- callableCodegen callable args
@@ -476,14 +478,13 @@ funToLLVM name params ty body =
            pure foper
 
 -- | Generate code for the entire module
-moduleCodegen :: [Decl JExpr]
+moduleCodegen :: String
              -> SymbolTable (AnnExpr '[ 'ExprType ])
              -> LLVMIR.ModuleBuilderT Codegen ()
-moduleCodegen decls symTab = mdo
+moduleCodegen srcCode symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
   (_, resultFmt) <- staticString ".resultformat" "Result: %i\n"
-  let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   RT.emitRuntimeDecls
   modify (\t -> t { tablePrintf = RT.printfRef })
@@ -508,10 +509,10 @@ moduleCodegen decls symTab = mdo
     LLVMIR.ret retcode
   pure ()
 
-runCodegen :: CompilerOpts -> [Decl JExpr] -> SymbolTable (AnnExpr '[ 'ExprType]) -> LLVM.Module
-runCodegen opts decls symTab
+runCodegen :: CompilerOpts -> String -> SymbolTable (AnnExpr '[ 'ExprType]) -> LLVM.Module
+runCodegen opts srcCode symTab
   = runIdentity
   . flip evalStateT emptyCodegenTable
   . unCodegen
   . LLVMIR.buildModuleT "simpl.ll"
-  $ lift (initCodegenTable opts symTab) >> moduleCodegen decls symTab
+  $ lift (initCodegenTable opts symTab) >> moduleCodegen srcCode symTab
