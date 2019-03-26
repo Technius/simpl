@@ -41,6 +41,7 @@ dependencies:
 - prettyprinter
 - unification-fd
 - mtl
+- monad-supply
 - containers
 - bytestring
 - optparse-applicative

@@ -363,6 +363,7 @@ callableCodegen callable args = case callable of
       _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
       LLVMIR.int64 0
     _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
+  CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
 
 jexprCodegen
         :: AnnExpr '[ 'ExprType]

@@ -47,6 +47,7 @@ data Callable
   | CCast !Numeric -- ^ Numeric cast
   | CCtor !Name -- ^ ADT constructor
   | CPrint -- ^ Print string (temporary)
+  | CFunRef !Name -- ^ Static function reference
   deriving (Show)
 
 -- | A value
@@ -123,6 +124,7 @@ instance Pretty Callable where
     CCast num -> "cast[" <> pretty num <> "]"
     CCtor name -> pretty name
     CPrint -> "print"
+    CFunRef name -> "funref[" <> pretty name <> "]"
 
 instance Pretty JValue where
   pretty = \case
