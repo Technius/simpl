@@ -139,9 +139,10 @@ instance Pretty a => Pretty (JBranch a) where
 instance Pretty a => Pretty (Joinable a) where
   pretty = \case
     JIf guard trueBr falseBr ->
-      PP.hang 2 $ "if" <+> pretty guard <+> PP.group (
-        "then" <> PP.softline <> pretty trueBr <> PP.softline
-        <> "else" <> PP.softline <> pretty falseBr)
+      PP.hang 2 $ PP.sep
+        [ "if" <+> pretty guard
+        , "then" <> PP.softline <> PP.align (pretty trueBr)
+        , "else" <> PP.softline <> PP.align (pretty falseBr) ]
     JCase expr brs ->
       PP.hang 2 $ "case" <+> pretty expr <+> "of" <> PP.hardline <>
       (PP.vsep $ pretty <$> brs)
@@ -153,13 +154,13 @@ instance Pretty JExpr where
       f = \case
         JVal v -> pretty v
         JLet n v next -> PP.hsep ["let", pretty n, "=", pretty v, "in"] <> PP.softline <> pretty next
-        JJoin lbl n joinbl next -> PP.align $
-          PP.hang 2 (PP.hsep ["join", pretty lbl, "bind", pretty n, "="]
-                     <> PP.softline <> pretty joinbl)
+        JJoin lbl n joinbl next ->
+          (PP.group . PP.hang 2 $ PP.hsep ["join" <> PP.enclose "[" "]" (pretty lbl), pretty n, "="]
+                    <> PP.flatAlt PP.hardline " " <> pretty joinbl)
           <> PP.hardline <> "in" <+> pretty next
         JJump lbl v -> PP.hsep ["jump", pretty lbl, "with", pretty v]
         JApp name clbl args next ->
-          PP.hsep (["let app", pretty name, "=", pretty clbl] ++ (pretty <$> args))
+          PP.hsep (["let app", pretty name, "=", pretty clbl] ++ (pretty <$> args) ++ ["in"])
           <> PP.hardline <> pretty next
 
 -- * Annotated [JExpr]s
