@@ -242,25 +242,27 @@ jvalueCodegen = \case
         JVar name -> gets (snd . fromJust . Map.lookup name . tableVars)
         JLit l    -> literalCodegen l
 
-joinableCodegen
-        :: Joinable (AnnExpr '[ 'ExprType])
+controlFlowCodegen
+        :: JValue
+        -> LLVM.Operand
+        -> ControlFlow (AnnExpr '[ 'ExprType])
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) ()
-joinableCodegen = \case
-  JIf guardVal trueBr falseBr -> do
+controlFlowCodegen val valOper = \case
+  JIf (Cfe trueBr trueCf) (Cfe falseBr falseCf) -> do
     LLVMIR.ensureBlock
-    cond <- jvalueCodegen guardVal
     trueLabel <- LLVMIR.freshName "if_then"
     falseLabel <- LLVMIR.freshName "if_else"
-    LLVMIR.condBr cond trueLabel falseLabel
+    LLVMIR.condBr valOper trueLabel falseLabel
     LLVMIR.emitBlockStart trueLabel
-    _ <- jexprCodegen trueBr
+    (trueVal, trueOper) <- jexprCodegen trueBr
+    _ <- controlFlowCodegen trueVal trueOper trueCf
     LLVMIR.emitBlockStart falseLabel
-    _ <- jexprCodegen falseBr
+    (falseVal, falseOper) <- jexprCodegen falseBr
+    _ <- controlFlowCodegen falseVal falseOper falseCf
     pure ()
-  JCase val branches -> do
+  JCase branches -> do
     LLVMIR.ensureBlock
     defLabel <- LLVMIR.freshName "case_default"
-    valOper <- jvalueCodegen val
     allCaseLabels <- forM branches $ \case
       BrAdt name _ _ ->
         let labelName = "case_" <> fromString (Text.unpack name) in
@@ -276,6 +278,7 @@ joinableCodegen = \case
     LLVMIR.switch tag defLabel jumpTable
     forM_ (usedLabelTriples `zip` branches) $ \((_, (ctorName, label)), br) -> do
       let expr = branchGetExpr br
+      let cf = branchGetControlFlow br
       (_, ctorLLVMName, index) <- gets (fromJust . Map.lookup ctorName . tableCtors)
       let Ctor _ argTys = ctors !! index
       let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
@@ -293,9 +296,19 @@ joinableCodegen = \case
         ty <- lookupValueType (JVar n)
         pure (n, (ty, v))
       let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
-      localCodegenTable updateTable (jexprCodegen expr)
+      (exprVal, exprOper) <- jexprCodegen expr
+      localCodegenTable updateTable (controlFlowCodegen exprVal exprOper cf)
     LLVMIR.emitBlockStart defLabel
     LLVMIR.unreachable
+  JJump lbl -> do
+    v <- jvalueCodegen val
+    jvals <- gets tableJoinValues
+    block <- LLVMIR.currentBlock
+    let f = (\(n, jvs) -> Just (n, (v, block) : jvs))
+    let updJvals = Map.update f lbl jvals
+    modify (\t -> t { tableJoinValues = updJvals })
+    llvmLabel <- gets (fst . fromJust . Map.lookup lbl . tableJoinValues)
+    LLVMIR.br llvmLabel
 
 callableCodegen
         :: Callable
@@ -365,40 +378,31 @@ callableCodegen callable args = case callable of
 
 jexprCodegen
         :: AnnExpr '[ 'ExprType]
-        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) LLVM.Operand
+        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
 jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
   where
     go :: TypeF Type
        -> JExprF (AnnExpr '[ 'ExprType ])
-       -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) LLVM.Operand
+       -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
     go exprTy = \case
-      JVal v -> jvalueCodegen v
+      JVal v -> (v,) <$> jvalueCodegen v
       JLet name val next -> do
         oper <- jvalueCodegen val
         _ <- bindVariable name exprTy oper
         jexprCodegen next
-      JJoin lbl varName joinable next -> do
+      JJoin lbl varName (Cfe expr cf) next -> do
         llvmLabel <- LLVMIR.freshName (fromString (Text.unpack lbl))
         let addJoinEntry = \t ->
               t { tableJoinValues = Map.insert lbl (llvmLabel, []) (tableJoinValues t) }
         oldJoinEntries <- gets tableJoinValues
-        _ <- localCodegenTable addJoinEntry (joinableCodegen joinable)
+        (lastVal, lastValOper) <- jexprCodegen expr
+        _ <- localCodegenTable addJoinEntry (controlFlowCodegen lastVal lastValOper cf)
         (_, joinValues) <- gets (fromJust . Map.lookup lbl . tableJoinValues)
         modify (\t -> t { tableJoinValues = oldJoinEntries })
         LLVMIR.emitBlockStart llvmLabel
         op <- LLVMIR.phi joinValues
         bindVariable varName exprTy op
         jexprCodegen next
-      JJump lbl val -> do
-        v <- jvalueCodegen val
-        jvals <- gets tableJoinValues
-        block <- LLVMIR.currentBlock
-        let f = (\(n, jvs) -> Just (n, (v, block) : jvs))
-        let updJvals = Map.update f lbl jvals
-        modify (\t -> t { tableJoinValues = updJvals })
-        llvmLabel <- gets (fst . fromJust . Map.lookup lbl . tableJoinValues)
-        LLVMIR.br llvmLabel
-        pure v
       JApp varName callable args next -> do
         oper <- callableCodegen callable args
         bindVariable varName exprTy oper
@@ -471,7 +475,7 @@ funToLLVM name params ty body =
              let updVars t = tableVars t `Map.union` Map.fromList [(n, (unfix vty, op)) | ((n, vty), op) <- params `zip` args]
              modify (\t -> t { tableFuns = Map.insert name foper (tableFuns t)
                              , tableVars = updVars t })
-             retval <- jexprCodegen body
+             (_, retval) <- jexprCodegen body
              -- Restore old scope
              modify (\t -> t { tableVars = oldVars })
              LLVMIR.ret retval

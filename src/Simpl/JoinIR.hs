@@ -58,28 +58,35 @@ data JValue
   | JLit !Literal
   deriving (Show, Eq)
 
+
+-- | Represents how a value at the end of a control flow branch should be handled.
+data ControlFlow a
+  -- | If expression on the given value, with a true branch and a false branch
+  = JIf !(Cfe a) !(Cfe a)
+
+  -- | Case expression on the given value
+  | JCase ![JBranch a]
+
+  -- | Jump to the given enclosing join point with the given value.
+  | JJump !Text
+  deriving (Functor, Foldable, Traversable, Show)
+
+
 data JBranch a
-  = BrAdt Name [Name] !a -- ^ Destructure algebraic data type
+  = BrAdt Name [Name] !(Cfe a) -- ^ Destructure algebraic data type
   deriving (Functor, Foldable, Traversable, Show)
 
 branchGetExpr :: JBranch a -> a
 branchGetExpr = \case
-  BrAdt _ _ e -> e
+  BrAdt _ _ (Cfe e _) -> e
 
 branchGetBindings :: JBranch a -> [Text]
 branchGetBindings = \case
   BrAdt _ vars _ -> vars
 
-
--- | Represents expressions that must be bound to a join point.
-data Joinable a
-  -- | If expression on the given variable, with a true branch and a false
-  -- branch
-  = JIf !JValue !a !a
-
-  -- | Case expression on the given variable
-  | JCase !JValue ![JBranch a]
-  deriving (Functor, Foldable, Traversable, Show)
+branchGetControlFlow :: JBranch a -> ControlFlow a
+branchGetControlFlow = \case
+  BrAdt _ _ (Cfe _ cf) -> cf
 
 
 -- | The JoinIR expression type. Syntactically, it is in ANF-form with explicit
@@ -93,18 +100,20 @@ data JExprF a
 
   -- | A join point. Consists of a label, the variable representing the joined
   -- value, the expression to join, and the next expression.
-  | JJoin !Label !Name !(Joinable a) !a
-
-  -- | Jump to the given enclosing join point with the given value.
-  | JJump !Label !JValue
+  | JJoin !Label !Name !(Cfe a) !a
 
   -- | Apply the callable to the arguments, bind the result to the given name,
   -- and continue to the next expression.
   | JApp !Name !Callable ![JValue] !a
   deriving (Functor, Foldable, Traversable, Show)
 
+
+data Cfe a = Cfe !a !(ControlFlow a)
+  deriving (Functor, Foldable, Traversable, Show)
+
 $(deriveShow1 ''JBranch)
-$(deriveShow1 ''Joinable)
+$(deriveShow1 ''ControlFlow)
+$(deriveShow1 ''Cfe)
 $(deriveShow1 ''JExprF)
 
 type JExpr = Fix JExprF
@@ -114,7 +123,6 @@ jexprGetVal = \case
   JVal v -> v
   JLet n _ _ -> JVar n
   JJoin _ n _ _ -> JVar n
-  JJump _ v -> v
   JApp n _ _ _ -> JVar n
 
 instance Pretty Callable where
@@ -132,20 +140,22 @@ instance Pretty JValue where
     JLit l -> pretty l
 
 instance Pretty a => Pretty (JBranch a) where
-  pretty (BrAdt ctorName varNames expr) =
-    PP.hang 2 $ PP.hsep (pretty <$> brPart) <> PP.softline <> pretty expr
+  pretty (BrAdt ctorName varNames cfe) =
+    PP.hang 2 $ PP.hsep (pretty <$> brPart) <> PP.softline <> pretty cfe
     where brPart = [ctorName] ++ varNames ++ ["=>"]
 
-instance Pretty a => Pretty (Joinable a) where
+instance Pretty a => Pretty (ControlFlow a) where
   pretty = \case
-    JIf guard trueBr falseBr ->
-      PP.hang 2 $ PP.sep
-        [ "if" <+> pretty guard
-        , "then" <> PP.softline <> PP.align (pretty trueBr)
-        , "else" <> PP.softline <> PP.align (pretty falseBr) ]
-    JCase expr brs ->
-      PP.hang 2 $ "case" <+> pretty expr <+> "of" <> PP.hardline <>
+    JIf trueBr falseBr ->
+      PP.hang 2 $ "if" <+> PP.sep
+        [ "then" <> PP.softline <> PP.align (flatParens (pretty trueBr))
+        , "else" <> PP.softline <> PP.align (flatParens (pretty falseBr)) ]
+    JCase brs ->
+      PP.hang 2 $ "case" <+> "of" <> PP.hardline <>
       (PP.vsep $ pretty <$> brs)
+    JJump lbl -> PP.hsep ["jump", pretty lbl]
+    where
+      flatParens d = PP.flatAlt d (PP.parens d)
 
 instance Pretty JExpr where
   pretty = f . unfix
@@ -158,10 +168,18 @@ instance Pretty JExpr where
           (PP.group . PP.hang 2 $ PP.hsep ["join" <> PP.enclose "[" "]" (pretty lbl), pretty n, "="]
                     <> PP.flatAlt PP.hardline " " <> pretty joinbl)
           <> PP.hardline <> "in" <+> pretty next
-        JJump lbl v -> PP.hsep ["jump", pretty lbl, "with", pretty v]
         JApp name clbl args next ->
           PP.hsep (["let app", pretty name, "=", pretty clbl] ++ (pretty <$> args) ++ ["in"])
           <> PP.hardline <> pretty next
+
+instance Pretty a => Pretty (Cfe a) where
+  pretty (Cfe expr cf) =
+    PP.align (pretty expr <> ";" <> line <> pretty cf)
+    where
+      line = case cf of
+        JIf _ _ -> PP.hardline
+        JCase _ -> PP.hardline
+        JJump _ -> PP.softline
 
 -- * Annotated [JExpr]s
 --
@@ -236,10 +254,10 @@ exampleJExpr :: JExpr
 exampleJExpr = Fix $
   JJoin "label" "myvar" ifE (Fix (JVal (JVar "myvar")))
   where
-    ifE =
-      JIf (JLit (LitInt 5))
-          (Fix (JJump "label" (JLit (LitInt 10))))
-          (Fix (JJump "label" (JLit (LitInt 5))))
+    intVal = Fix . JVal . JLit . LitInt
+    ifE = Cfe (intVal 5) $
+      JIf (Cfe (intVal 10) (JJump "label"))
+          (Cfe (intVal 5) (JJump "label"))
 
 exampleTypedJExpr :: AnnExpr '[ 'ExprType ]
 exampleTypedJExpr = Fix $ AnnExprF
@@ -250,8 +268,9 @@ exampleTypedJExpr = Fix $ AnnExprF
     varE = Fix $ AnnExprF
       { annGetAnn = withType tyInt V.:& V.RNil
       , annGetExpr = JVal (JVar "myvar") }
-    ifE =
-      JIf (JLit (LitInt 5)) (jmpE 10) (jmpE 5)
-    jmpE v = Fix $ AnnExprF
+    intVal x = Fix $ AnnExprF
       { annGetAnn = withType tyInt V.:& V.RNil
-      , annGetExpr = JJump "label" (JLit (LitInt v)) }
+      , annGetExpr = JVal (JLit (LitInt x)) }
+    jmpCfe x = Cfe (intVal x) (JJump "label")
+    ifE = Cfe (intVal 5) $
+      JIf (jmpCfe 10) (jmpCfe 5)
