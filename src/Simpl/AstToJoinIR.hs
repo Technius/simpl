@@ -92,15 +92,14 @@ transformExpr :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
               -> m (J.AnnExpr '[ 'J.ExprType])
 transformExpr expr = anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
 
--- | Perform ANF transformation on the branch, returning to the jump label at
--- the end.
+-- | Perform ANF transformation on the branch, afterwards handling control flow.
 transformBranch :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-                => Text -- ^ Return label
+                => J.ControlFlow (J.AnnExpr '[ 'J.ExprType]) -- ^ Control flow handler
                 -> A.Branch (A.AnnExpr Type) -- ^ Branches
                 -> m (J.JBranch (J.AnnExpr '[ 'J.ExprType]))
-transformBranch retLabel (A.BrAdt adtName argNames expr) =
-  let jexprM = anfTransform expr (pure . makeJexpr (astType expr) . J.JJump retLabel) in
-    J.BrAdt adtName argNames <$> jexprM
+transformBranch cf (A.BrAdt adtName argNames expr) = do
+  jexpr <- anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
+  pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
 
 
 -- | Main ANF transformation logic
@@ -124,17 +123,25 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
   A.If guard trueBr falseBr ->
     anfTransform guard $ \jguard -> do
       lbl <- freshLabel
-      trueBr'  <- anfTransform trueBr (pure . makeJexpr (astType trueBr) . J.JJump lbl)
-      falseBr' <- anfTransform falseBr (pure . makeJexpr (astType falseBr) . J.JJump lbl)
+      trueBr'  <- anfTransform trueBr (pure . makeJexpr (astType trueBr) . J.JVal)
+      falseBr' <- anfTransform falseBr (pure . makeJexpr (astType falseBr) . J.JVal)
       name <- freshVar
-      makeJexpr ty . J.JJoin lbl name (J.JIf jguard trueBr' falseBr') <$>
+      let jmp = J.JJump lbl
+      let guardTy = A.annGetAnn (unfix guard)
+      let guardCfe = makeJexpr guardTy (J.JVal jguard)
+      let cfe = J.Cfe guardCfe (J.JIf (J.Cfe trueBr' jmp) (J.Cfe falseBr' jmp))
+      -- TODO: Make JJoin node placement more efficient
+      makeJexpr ty . J.JJoin lbl name cfe <$>
         local (symTabInsertVar name ty) (cont (J.JVar name))
   A.Case branches expr ->
     anfTransform expr $ \jexpr -> do
       lbl <- freshLabel
-      jbranches <- traverse (transformBranch lbl) branches
+      let jexprTy = A.annGetAnn (unfix expr)
+      jbranches <- traverse (transformBranch (J.JJump lbl)) branches
+      let jexprCfe = J.Cfe (makeJexpr jexprTy (J.JVal jexpr)) (J.JCase jbranches)
       name <- freshVar
-      makeJexpr ty . J.JJoin lbl name (J.JCase jexpr jbranches) <$>
+      -- TODO: Make JJoin node placement more efficient
+      makeJexpr ty . J.JJoin lbl name jexprCfe <$>
         local (symTabInsertVar name ty) (cont (J.JVar name))
   A.Cons ctorName args ->
     collectArgs args [] $ \argVals -> do
