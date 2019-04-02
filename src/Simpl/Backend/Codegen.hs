@@ -49,7 +49,7 @@ import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (literalType)
 import Simpl.Backend.Runtime ()
-import Simpl.JoinIR
+import Simpl.JoinIR.Syntax
 import qualified Simpl.Backend.Runtime as RT
 
 data CodegenTable =

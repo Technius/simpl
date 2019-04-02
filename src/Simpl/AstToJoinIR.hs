@@ -19,7 +19,7 @@ import Data.String (fromString)
 import Simpl.Ast (Type)
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
-import qualified Simpl.JoinIR as J
+import qualified Simpl.JoinIR.Syntax as J
 
 -- * Public API
 

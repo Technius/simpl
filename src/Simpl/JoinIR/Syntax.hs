@@ -17,14 +17,14 @@
 {-# LANGUAGE TypeApplications #-}
 
 {-|
-Module      : Simpl.JoinIR
+Module      : Simpl.JoinIR.Syntax
 Description : AST for the JoinIR
 
 Defines the abstract syntax tree for JoinIR, an IR for SimPL based on the IR
 presented in /Compiling without Continuations/ by Luke Maurer, Zena Ariola, Paul
 Downen, and Simon Peyton Jones (PLDI '17).
 -}
-module Simpl.JoinIR where
+module Simpl.JoinIR.Syntax where
 
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))

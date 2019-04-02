@@ -17,7 +17,7 @@ import Data.Text (Text)
 import Data.Set (Set)
 import qualified Data.Set as Set
 
-import Simpl.JoinIR
+import Simpl.JoinIR.Syntax
 
 -- * Verification Monad
 
