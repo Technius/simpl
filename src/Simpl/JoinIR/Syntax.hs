@@ -147,7 +147,7 @@ instance Pretty a => Pretty (JBranch a) where
 instance Pretty a => Pretty (ControlFlow a) where
   pretty = \case
     JIf trueBr falseBr ->
-      PP.hang 2 $ "if" <+> PP.sep
+      PP.hang 3 $ "if" <+> PP.sep
         [ "then" <> PP.softline <> PP.align (flatParens (pretty trueBr))
         , "else" <> PP.softline <> PP.align (flatParens (pretty falseBr)) ]
     JCase brs ->
