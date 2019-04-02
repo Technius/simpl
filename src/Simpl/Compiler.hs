@@ -12,7 +12,7 @@ import LLVM.Context
 
 import Simpl.Ast
 import Simpl.AstToJoinIR
-import Simpl.Backend.CodegenJoin (runCodegen)
+import Simpl.Backend.Codegen (runCodegen)
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)

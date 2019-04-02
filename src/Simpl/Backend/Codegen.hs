@@ -13,7 +13,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecursiveDo #-}
-module Simpl.Backend.CodegenJoin where
+module Simpl.Backend.Codegen where
 
 import Control.Applicative ((<|>))
 import Control.Monad (forM, forM_)
