@@ -89,3 +89,5 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - simpl-lang
+    - tasty
+    - tasty-hunit

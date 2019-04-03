@@ -223,6 +223,10 @@ type AnnExpr fields = Fix (AnnExprF fields)
 toAnnExprF :: JExprF a -> AnnExprF '[] a
 toAnnExprF expr = AnnExprF { annGetAnn = V.RNil, annGetExpr = expr }
 
+-- | Converts a [JExpr] to an "unannotated" [AnnExpr]
+toAnnExpr :: JExpr -> AnnExpr '[]
+toAnnExpr expr = cata (Fix . toAnnExprF) expr
+
 -- | Removes all annotations from an [AnnExpr]
 unannotate :: AnnExpr fields -> JExpr
 unannotate = cata (Fix . annGetExpr)
@@ -246,31 +250,3 @@ $(deriveShow1 ''PrettyJExprF)
 prettyAnnExpr :: Show (V.Rec Attr fields) => AnnExpr fields -> PrettyJExpr
 prettyAnnExpr = cata $ \expr ->
   Fix (PrettyJExprF (show (annGetAnn expr), annGetExpr expr))
-
-exampleAnnotation :: V.Rec Attr '[ 'ExprType ]
-exampleAnnotation = (SExprType =:: Fix (TyNumber NumInt)) V.:& V.RNil
-
-exampleJExpr :: JExpr
-exampleJExpr = Fix $
-  JJoin "label" "myvar" ifE (Fix (JVal (JVar "myvar")))
-  where
-    intVal = Fix . JVal . JLit . LitInt
-    ifE = Cfe (intVal 5) $
-      JIf (Cfe (intVal 10) (JJump "label"))
-          (Cfe (intVal 5) (JJump "label"))
-
-exampleTypedJExpr :: AnnExpr '[ 'ExprType ]
-exampleTypedJExpr = Fix $ AnnExprF
-  { annGetAnn = withType tyInt V.:& V.RNil
-  , annGetExpr = JJoin "label" "myvar" ifE varE  }
-  where
-    tyInt = Fix (TyNumber NumInt)
-    varE = Fix $ AnnExprF
-      { annGetAnn = withType tyInt V.:& V.RNil
-      , annGetExpr = JVal (JVar "myvar") }
-    intVal x = Fix $ AnnExprF
-      { annGetAnn = withType tyInt V.:& V.RNil
-      , annGetExpr = JVal (JLit (LitInt x)) }
-    jmpCfe x = Cfe (intVal x) (JJump "label")
-    ifE = Cfe (intVal 5) $
-      JIf (jmpCfe 10) (jmpCfe 5)
