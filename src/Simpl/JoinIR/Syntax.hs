@@ -29,7 +29,7 @@ module Simpl.JoinIR.Syntax where
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))
 import qualified Data.Text.Prettyprint.Doc as PP
-import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type, TypeF(..))
+import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type)
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
 import qualified Data.Vinyl as V

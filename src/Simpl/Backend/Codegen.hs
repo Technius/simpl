@@ -123,7 +123,7 @@ bindVariable :: MonadState CodegenTable m
              -> TypeF Type
              -> LLVM.Operand
              -> m ()
-bindVariable name ty oper = do
+bindVariable name ty oper =
   modify (\t -> t { tableVars = Map.insert name (ty, oper) (tableVars t) })
 
 initCodegenTable :: CompilerOpts -> SymbolTable (AnnExpr '[ 'ExprType ]) -> Codegen ()
@@ -170,6 +170,7 @@ staticString name str = do
 llvmName :: Text -> LLVM.Name
 llvmName = LLVM.mkName . Text.unpack
 
+-- | Generates LLVM code for a literal.
 literalCodegen :: LLVMIR.MonadIRBuilder m => Literal -> m LLVM.Operand
 literalCodegen = \case
   LitInt x -> LLVMIR.int64 (fromIntegral x)
@@ -234,6 +235,7 @@ binOpCodegen op ty x y =
         Equal -> (LLVMIR.fcmp LLVMFP.OEQ, LLVMIR.icmp LLVMIP.EQ)
   in numBinopCodegen x y ty floatInstr intInstr
 
+-- | Generates code for a [JValue].
 jvalueCodegen
         :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
         => JValue
@@ -242,10 +244,11 @@ jvalueCodegen = \case
         JVar name -> gets (snd . fromJust . Map.lookup name . tableVars)
         JLit l    -> literalCodegen l
 
+-- | Generates code for a CFE.
 controlFlowCodegen
-        :: JValue
-        -> LLVM.Operand
-        -> ControlFlow (AnnExpr '[ 'ExprType])
+        :: JValue -- ^ The value to continue control flow with.
+        -> LLVM.Operand -- ^ The LLVM operand of the value.
+        -> ControlFlow (AnnExpr '[ 'ExprType]) -- ^ The control flow continuation.
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) ()
 controlFlowCodegen val valOper = \case
   JIf (Cfe trueBr trueCf) (Cfe falseBr falseCf) -> do
@@ -304,15 +307,16 @@ controlFlowCodegen val valOper = \case
     v <- jvalueCodegen val
     jvals <- gets tableJoinValues
     block <- LLVMIR.currentBlock
-    let f = (\(n, jvs) -> Just (n, (v, block) : jvs))
+    let f (n, jvs) = Just (n, (v, block) : jvs)
     let updJvals = Map.update f lbl jvals
     modify (\t -> t { tableJoinValues = updJvals })
     llvmLabel <- gets (fst . fromJust . Map.lookup lbl . tableJoinValues)
     LLVMIR.br llvmLabel
 
+-- | Generates code for a given callable (i.e. in a JApp)
 callableCodegen
-        :: Callable
-        -> [JValue]
+        :: Callable -- ^ The callable
+        -> [JValue] -- ^ The argument values
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) LLVM.Operand
 callableCodegen callable args = case callable of
   CFunc name -> do
@@ -376,6 +380,7 @@ callableCodegen callable args = case callable of
     _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
   CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
 
+-- | Generates code for a [JExpr]
 jexprCodegen
         :: AnnExpr '[ 'ExprType]
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
@@ -392,7 +397,7 @@ jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
         jexprCodegen next
       JJoin lbl varName (Cfe expr cf) next -> do
         llvmLabel <- LLVMIR.freshName (fromString (Text.unpack lbl))
-        let addJoinEntry = \t ->
+        let addJoinEntry t =
               t { tableJoinValues = Map.insert lbl (llvmLabel, []) (tableJoinValues t) }
         oldJoinEntries <- gets tableJoinValues
         (lastVal, lastValOper) <- jexprCodegen expr

@@ -5,6 +5,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-|
+Module      : Simpl.AstToJoinIR
+Description : Provides a function to normalize SimPL AST, transforming it into
+              JoinIR.
+-}
 module Simpl.AstToJoinIR
   ( astToJoinIR
   ) where
@@ -54,18 +59,22 @@ runTransformT m table
 runTransform :: Transform a -> SymbolTable (A.AnnExpr Type) -> a
 runTransform m table = runIdentity (runTransformT m table)
 
+-- | Generates a fresh name using the given prefix and lookup function
 freshName :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
          => Text -- ^ Prefix
+         -> (Text -> SymbolTable (A.AnnExpr Type) -> Maybe a) -- ^ Lookup function
          -> m Text
-freshName prefix = do
+freshName prefix lookupFun = do
   next <- (prefix <>) . fromString . show <$> supply
-  asks (symTabLookupVar next) >>= \case
+  asks (lookupFun next) >>= \case
     Nothing -> pure next
-    Just _  -> freshName prefix
+    Just _  -> freshName prefix lookupFun
 
 freshVar, freshLabel :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m) => m Text
-freshVar = freshName "var"
-freshLabel = freshName "join"
+-- | Generate a fresh variable name
+freshVar = freshName "var" symTabLookupVar
+-- | Generate a fresh join label
+freshLabel = freshName "join" symTabLookupFun
 
 -- * Private utility functions
 
@@ -102,10 +111,12 @@ transformBranch cf (A.BrAdt adtName argNames expr) = do
   pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
 
 
--- | Main ANF transformation logic
+-- | Main ANF transformation logic. Given the SimPL AST, this function will
+-- normalize the AST, and then it will feed the final JValue into the given
+-- continuation to produce the resulting JoinIR AST.
 anfTransform :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-             => A.AnnExpr Type
-             -> (J.JValue -> m (J.AnnExpr '[ 'J.ExprType]))
+             => A.AnnExpr Type -- ^ Expression to translate
+             -> (J.JValue -> m (J.AnnExpr '[ 'J.ExprType])) -- ^ Continuation
              -> m (J.AnnExpr '[ 'J.ExprType])
 anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
   A.Lit lit -> cont (J.JLit lit)
@@ -144,12 +155,12 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
       makeJexpr ty . J.JJoin lbl name jexprCfe <$>
         local (symTabInsertVar name ty) (cont (J.JVar name))
   A.Cons ctorName args ->
-    collectArgs args [] $ \argVals -> do
+    collectArgs args $ \argVals -> do
       varName <- freshVar
       makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals <$>
         local (symTabInsertVar varName ty) (cont (J.JVar varName))
   A.App funcName args ->
-    collectArgs args [] $ \argVals -> do
+    collectArgs args $ \argVals -> do
       varName <- freshVar
       makeJexpr ty . J.JApp varName (J.CFunc funcName) argVals <$>
         local (symTabInsertVar varName ty) (cont (J.JVar varName))
@@ -171,9 +182,10 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
 -- | Normalize each expression in sequential order, and then run the
 -- continuation with the expression values.
 collectArgs :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-            => [A.AnnExpr Type]
-            -> [J.JValue]
-            -> ([J.JValue] -> m (J.AnnExpr '[ 'J.ExprType]))
+            => [A.AnnExpr Type] -- ^ Argument expressions
+            -> ([J.JValue] -> m (J.AnnExpr '[ 'J.ExprType])) -- ^ Continuation
             -> m (J.AnnExpr '[ 'J.ExprType])
-collectArgs [] vals mcont = mcont (reverse vals)
-collectArgs (x:xs) vals mcont = anfTransform x $ \v -> collectArgs xs (v:vals) mcont
+collectArgs = go []
+  where
+    go vals [] mcont = mcont (reverse vals)
+    go vals (x:xs) mcont = anfTransform x $ \v -> go (v:vals) xs mcont
