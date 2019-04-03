@@ -7,7 +7,7 @@ Module      : Simpl.JoinIR.Verify
 Description : Verifies validity of a JoinIR AST
 -}
 module Simpl.JoinIR.Verify
-  (verify, VerifyCtx(..), emptyCtx) where
+  (verify, VerifyCtx(..), emptyCtx, VerifyError(..)) where
 
 import Control.Monad.Reader
 import Control.Monad.Except
@@ -65,8 +65,8 @@ data VerifyError = VarRedefinition Text
                  | NoSuchVar Text
                  deriving (Show, Eq)
 
-verify :: AnnExpr a -> Either VerifyError ()
-verify expr = runVerify (doVerifyExpr expr) emptyCtx
+verify :: VerifyCtx -> AnnExpr a -> Either VerifyError ()
+verify ctx expr = runVerify (doVerifyExpr expr) ctx
 
 -- | Throw an error if the variable is already bound
 checkUnboundVar :: (MonadError VerifyError m, MonadReader VerifyCtx m)
