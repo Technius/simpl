@@ -41,10 +41,13 @@ dependencies:
 - prettyprinter
 - unification-fd
 - mtl
+- monad-supply
 - containers
 - bytestring
 - optparse-applicative
 - safe-exceptions
+- vinyl
+- singletons
 
 ghc-options:
 - -Wall
@@ -86,3 +89,5 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - simpl-lang
+    - tasty
+    - tasty-hunit

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# OPTIONS_GHC -Wno-incomplete-record-updates #-} -- Suppress LLVM sum type of records AST warnings
@@ -17,8 +19,7 @@ import Control.Applicative ((<|>))
 import Control.Monad (forM, forM_)
 import Control.Monad.Reader
 import Control.Monad.State
-import Data.Functor.Foldable (para, unfix)
-import Data.Text.Prettyprint.Doc (pretty)
+import Data.Functor.Foldable (unfix, Fix(..))
 import Data.Char (ord)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -27,10 +28,8 @@ import Data.ByteString ()
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Functor.Identity
-import Data.List.NonEmpty (NonEmpty(..))
 
 import Data.String (fromString)
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as Text
 import qualified Data.Map as Map
 import qualified LLVM.AST as LLVM
@@ -45,19 +44,20 @@ import qualified LLVM.IRBuilder.Monad as LLVMIR
 import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
-import Simpl.Ast
+import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Typing (TypedExpr)
+import Simpl.Typing (literalType)
 import Simpl.Backend.Runtime ()
+import Simpl.JoinIR.Syntax
 import qualified Simpl.Backend.Runtime as RT
 
 data CodegenTable =
-  MkCodegenTable { tableVars :: Map Text LLVM.Operand -- ^ Pointer to variables
+  MkCodegenTable { tableVars :: Map Text (TypeF Type, LLVM.Operand) -- ^ Pointer to variables
                  , tableCtors :: Map Text (LLVM.Name, LLVM.Name, Int) -- ^ Data type name, ctor name, index
                  , tableAdts :: Map Text (LLVM.Name, Type, [Constructor])
                  , tableFuns :: Map Text LLVM.Operand
-                 , tableCurrentJoin :: LLVM.Name
+                 , tableJoinValues :: Map Text (LLVM.Name, [(LLVM.Operand, LLVM.Name)])
                  , tablePrintf :: LLVM.Operand
                  , tableOptions :: CompilerOpts }
   deriving (Show)
@@ -70,7 +70,7 @@ emptyCodegenTable =
                  , tableCtors = Map.empty
                  , tableAdts = Map.empty
                  , tableFuns = Map.empty
-                 , tableCurrentJoin = LLVM.mkName "__default_join_point"
+                 , tableJoinValues = Map.empty
                  , tablePrintf = error "printf not set"
                  , tableOptions = defaultCompilerOpts }
 
@@ -88,16 +88,45 @@ deriving instance Monad m => Monad (CodegenT m)
 instance MonadTrans CodegenT where
   lift = CodegenT . lift
 
-instance Monad m => MonadReader CodegenTable (CodegenT m) where
-  ask = local id get
-  local f action = do
-    curTable <- get
-    modify f
-    result <- action
-    put curTable
-    pure result
+localCodegenTable :: MonadState CodegenTable m
+                  => (CodegenTable -> CodegenTable)
+                  -> m a
+                  -> m a
+localCodegenTable f ma = do
+  oldTable <- get
+  put (f oldTable)
+  res <- ma
+  modify $ \t -> t
+    { tableVars = tableVars oldTable
+    , tableFuns = tableFuns oldTable
+    }
+  pure res
 
-initCodegenTable :: CompilerOpts -> SymbolTable TypedExpr -> Codegen ()
+lookupName :: MonadState CodegenTable m
+           => Text
+           -> m (Maybe LLVM.Operand)
+lookupName name =
+  gets $ \t ->
+    (snd <$> Map.lookup name (tableVars t)) <|> Map.lookup name (tableFuns t)
+
+-- | Looks up the type of the [JValue]. Note: assumes that if the [JValue] is a
+-- [JVar], then the variable is actually in the table.
+lookupValueType :: MonadState CodegenTable m
+              => JValue
+              -> m (TypeF Type)
+lookupValueType = \case
+  JVar name -> gets (fst . fromJust . Map.lookup name . tableVars)
+  JLit lit -> pure $ literalType lit
+
+bindVariable :: MonadState CodegenTable m
+             => Text
+             -> TypeF Type
+             -> LLVM.Operand
+             -> m ()
+bindVariable name ty oper =
+  modify (\t -> t { tableVars = Map.insert name (ty, oper) (tableVars t) })
+
+initCodegenTable :: CompilerOpts -> SymbolTable (AnnExpr '[ 'ExprType ]) -> Codegen ()
 initCodegenTable options symTab = do
   let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
   ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
@@ -106,63 +135,6 @@ initCodegenTable options symTab = do
   modify $ \t -> t { tableAdts = adts
                    , tableCtors = Map.fromList (join ctors)
                    , tableOptions = options }
-
-data Result = Values (NonEmpty LLVM.Operand) | Branching (NonEmpty (LLVM.Operand, LLVM.Name))
-  deriving (Show, Eq)
-
-instance Ord Result where
-  compare (Values v1) (Values v2) = compare v1 v2
-  compare (Values _) (Branching _) = GT
-  compare (Branching _) (Values _) = LT
-  compare (Branching br1) (Branching br2) = compare br1 br2
-
-resultHasJump :: Result -> Bool
-resultHasJump (Values _) = False
-resultHasJump (Branching _) = True
-
-joinPoint :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-          => m (NonEmpty Result)
-          -> m (NonEmpty LLVM.Operand)
-joinPoint resultsM = do
-  currentJp <- gets tableCurrentJoin
-  newJp <- LLVMIR.freshName "join_point"
-  modify (\t -> t { tableCurrentJoin = newJp })
-  results <- resultsM
-    -- modify (\t -> t { tableCurrentJoin = newJp })
-  modify (\t -> t { tableCurrentJoin = currentJp })
-  let hasJump = any resultHasJump results
-  when hasJump $
-    LLVMIR.emitBlockStart newJp
-  let go (Values v) = pure v
-      go (Branching brs) =
-        if length brs == 1
-          then pure (fst <$> brs)
-          else (:| []) <$> LLVMIR.phi (NE.toList brs)
-  join <$> traverse go (NE.sort results)
-
-joinPoint1 :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-           => m Result
-           -> m LLVM.Operand
-joinPoint1 = fmap NE.head . joinPoint . fmap (:| [])
-
-resultValue :: LLVM.Operand -> Result
-resultValue v = Values (v :| [])
-
-resultBranching :: NonEmpty (LLVM.Operand, LLVM.Name) -> Result
-resultBranching = Branching
-
-resultEnsureBranch :: LLVMIR.MonadIRBuilder m => Result -> m Result
-resultEnsureBranch = \case
-  Values vs -> LLVMIR.currentBlock >>= \cb -> pure $ Branching ((, cb) <$> vs)
-  b@Branching {} -> pure b
-
-resultCombine :: LLVMIR.MonadIRBuilder m => Result -> Result -> m Result
-resultCombine (Values v1) (Values v2) = pure $ Values (v1 <> v2)
-resultCombine (Values v1) (Branching br2) =
-  LLVMIR.currentBlock >>= \cb -> pure $ Branching (((, cb) <$> v1) <> br2)
-resultCombine (Branching br1) (Values v2) =
-  LLVMIR.currentBlock >>= \cb -> pure $ Branching (br1 <> ((, cb) <$> v2))
-resultCombine (Branching br1) (Branching br2) = pure $ Branching (br1 <> br2)
 
 llvmByte :: Integer -> LLVMC.Constant
 llvmByte = LLVMC.Int 8
@@ -198,11 +170,12 @@ staticString name str = do
 llvmName :: Text -> LLVM.Name
 llvmName = LLVM.mkName . Text.unpack
 
-literalCodegen :: LLVMIR.MonadIRBuilder m => Literal -> m Result
+-- | Generates LLVM code for a literal.
+literalCodegen :: LLVMIR.MonadIRBuilder m => Literal -> m LLVM.Operand
 literalCodegen = \case
-  LitInt x -> resultValue <$> LLVMIR.int64 (fromIntegral x)
-  LitDouble x -> resultValue <$> LLVMIR.double x
-  LitBool b -> resultValue <$> LLVMIR.bit (if b then 1 else 0)
+  LitInt x -> LLVMIR.int64 (fromIntegral x)
+  LitDouble x -> LLVMIR.double x
+  LitBool b -> LLVMIR.bit (if b then 1 else 0)
   LitString t -> do
     -- TODO: Store literal strings in global memory
     let byteS = encodeUtf8 t
@@ -215,29 +188,28 @@ literalCodegen = \case
     byteDataPtr' <- LLVMIR.bitcast byteDataPtr (LLVM.ptr LLVM.i8)
     bytePtr <- LLVMIR.call RT.mallocRef [(lenOper, [])]
     _ <- LLVMIR.call RT.memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, [])]
-    str <- LLVMIR.call RT.stringNewRef [(lenOper, []), (bytePtr, [])]
-    pure $ resultValue str
+    LLVMIR.call RT.stringNewRef [(lenOper, []), (bytePtr, [])]
 
 -- | Generates code for an arbitrary binary operation
-binaryOpCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-      => m Result
-      -> m Result
+binaryOpCodegen
+      :: LLVMIR.MonadIRBuilder m
+      => m LLVM.Operand
+      -> m LLVM.Operand
       -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand)
-      -> m Result
+      -> m LLVM.Operand
 binaryOpCodegen x y op = do
-  x' <- joinPoint1 x
-  y' <- joinPoint1 y
-  res <- op x' y'
-  pure $ resultValue res
+  x' <- x
+  y' <- y
+  op x' y'
 
 -- | Generates code for a numeric binary operation
-numBinopCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
-      => m Result
-      -> m Result
+numBinopCodegen :: LLVMIR.MonadIRBuilder m
+      => m LLVM.Operand
+      -> m LLVM.Operand
       -> Type
       -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Float operation
       -> (LLVM.Operand -> LLVM.Operand -> m LLVM.Operand) -- ^ Integer operation
-      -> m Result
+      -> m LLVM.Operand
 numBinopCodegen x y ty opDouble opInt =
   case unfix ty of
     TyNumber numTy ->
@@ -246,163 +218,200 @@ numBinopCodegen x y ty opDouble opInt =
     _ -> error "Invariant violated"
 
 -- | Generates code for BinOp
-binOpCodegen :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+binOpCodegen :: LLVMIR.MonadIRBuilder m
             => BinaryOp -- ^ Operation
             -> Type -- ^ Type of the inputs
-            -> m Result
-            -> m Result
-            -> m Result
+            -> m LLVM.Operand
+            -> m LLVM.Operand
+            -> m LLVM.Operand
 binOpCodegen op ty x y =
   let (floatInstr, intInstr) = case op of
         Add -> (LLVMIR.fadd, LLVMIR.add)
         Sub -> (LLVMIR.fsub, LLVMIR.sub)
         Mul -> (LLVMIR.fmul, LLVMIR.mul)
         Div -> (LLVMIR.fdiv, LLVMIR.sdiv)
-        Lt -> ((LLVMIR.fcmp LLVMFP.OLT), (LLVMIR.icmp LLVMIP.SLT))
-        Lte -> ((LLVMIR.fcmp LLVMFP.OLE), (LLVMIR.icmp LLVMIP.SLE))
-        Equal -> ((LLVMIR.fcmp LLVMFP.OEQ), (LLVMIR.icmp LLVMIP.EQ))
+        Lt -> (LLVMIR.fcmp LLVMFP.OLT, LLVMIR.icmp LLVMIP.SLT)
+        Lte -> (LLVMIR.fcmp LLVMFP.OLE, LLVMIR.icmp LLVMIP.SLE)
+        Equal -> (LLVMIR.fcmp LLVMFP.OEQ, LLVMIR.icmp LLVMIP.EQ)
   in numBinopCodegen x y ty floatInstr intInstr
 
-exprCodegen :: TypedExpr -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
-exprCodegen = para (go . annGetExpr)
+-- | Generates code for a [JValue].
+jvalueCodegen
+        :: (LLVMIR.MonadIRBuilder m, MonadState CodegenTable m)
+        => JValue
+        -> m LLVM.Operand
+jvalueCodegen = \case
+        JVar name -> gets (snd . fromJust . Map.lookup name . tableVars)
+        JLit l    -> literalCodegen l
+
+-- | Generates code for a CFE.
+controlFlowCodegen
+        :: JValue -- ^ The value to continue control flow with.
+        -> LLVM.Operand -- ^ The LLVM operand of the value.
+        -> ControlFlow (AnnExpr '[ 'ExprType]) -- ^ The control flow continuation.
+        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) ()
+controlFlowCodegen val valOper = \case
+  JIf (Cfe trueBr trueCf) (Cfe falseBr falseCf) -> do
+    LLVMIR.ensureBlock
+    trueLabel <- LLVMIR.freshName "if_then"
+    falseLabel <- LLVMIR.freshName "if_else"
+    LLVMIR.condBr valOper trueLabel falseLabel
+    LLVMIR.emitBlockStart trueLabel
+    (trueVal, trueOper) <- jexprCodegen trueBr
+    _ <- controlFlowCodegen trueVal trueOper trueCf
+    LLVMIR.emitBlockStart falseLabel
+    (falseVal, falseOper) <- jexprCodegen falseBr
+    _ <- controlFlowCodegen falseVal falseOper falseCf
+    pure ()
+  JCase branches -> do
+    LLVMIR.ensureBlock
+    defLabel <- LLVMIR.freshName "case_default"
+    allCaseLabels <- forM branches $ \case
+      BrAdt name _ _ ->
+        let labelName = "case_" <> fromString (Text.unpack name) in
+        (name, ) <$> LLVMIR.freshName labelName
+    -- Assume the symbol table and type information is correct
+    dataName <- (\case { TyAdt n -> n; _ -> error "" }) <$> lookupValueType val
+    ctors <- gets ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
+    let ctorNames = ctorGetName <$> ctors
+    let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
+    let jumpTable = [(LLVMC.Int 32 i, l) | (i, (_, l)) <- usedLabelTriples]
+    tag <- LLVMIR.extractValue valOper [0]
+    dataPtr <- LLVMIR.extractValue valOper [1]
+    LLVMIR.switch tag defLabel jumpTable
+    forM_ (usedLabelTriples `zip` branches) $ \((_, (ctorName, label)), br) -> do
+      let expr = branchGetExpr br
+      let cf = branchGetControlFlow br
+      (_, ctorLLVMName, index) <- gets (fromJust . Map.lookup ctorName . tableCtors)
+      let Ctor _ argTys = ctors !! index
+      let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
+      LLVMIR.emitBlockStart label
+      ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
+      ctorPtrOffset <- LLVMIR.int32 0
+      bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, llvmTy)) -> do
+        ctorPtrIndex <- LLVMIR.int32 i
+        -- Need to bitcast the ptr type because we need a concrete type. We
+        -- also need to load the data immediately because of how variables
+        -- are implemented.
+        v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
+             >>= flip LLVMIR.bitcast (LLVM.ptr llvmTy)
+             >>= flip LLVMIR.load 0
+        ty <- lookupValueType (JVar n)
+        pure (n, (ty, v))
+      let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
+      (exprVal, exprOper) <- jexprCodegen expr
+      localCodegenTable updateTable (controlFlowCodegen exprVal exprOper cf)
+    LLVMIR.emitBlockStart defLabel
+    LLVMIR.unreachable
+  JJump lbl -> do
+    v <- jvalueCodegen val
+    jvals <- gets tableJoinValues
+    block <- LLVMIR.currentBlock
+    let f (n, jvs) = Just (n, (v, block) : jvs)
+    let updJvals = Map.update f lbl jvals
+    modify (\t -> t { tableJoinValues = updJvals })
+    llvmLabel <- gets (fst . fromJust . Map.lookup lbl . tableJoinValues)
+    LLVMIR.br llvmLabel
+
+-- | Generates code for a given callable (i.e. in a JApp)
+callableCodegen
+        :: Callable -- ^ The callable
+        -> [JValue] -- ^ The argument values
+        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) LLVM.Operand
+callableCodegen callable args = case callable of
+  CFunc name -> do
+   fn <- fromJust <$> lookupName name
+   ops <- traverse jvalueCodegen args
+   LLVMIR.call fn [(x, []) | x <- ops]
+  CBinOp op -> case args of
+    [x, y] -> do
+      xTy <- lookupValueType x
+      binOpCodegen op (Fix xTy) (jvalueCodegen x) (jvalueCodegen y)
+    _ -> error $ "callableCodegen: expected 2 args to CBinOp, got " ++ show (length args)
+  CCast targetNum -> case args of
+    [x] -> do
+      ty <- lookupValueType x
+      case ty of
+        TyNumber srcNum -> jvalueCodegen x >>= castOpCodegen srcNum targetNum
+        _ -> error $ "callableCodegen: expected CCast argument to be of numeric type, got " ++ show ty
+    _ -> error $ "callableCodegen: expected 1 args to CCast, got " ++ show (length args)
+  CCtor name -> do
+    -- Assume constructor exists, since typechecker should verify it anyways
+    (dataTy, ctorName, ctorIndex) <- gets (fromJust . Map.lookup name . tableCtors)
+    ctorIndex' <- LLVMIR.int32 (fromIntegral ctorIndex)
+    let tagStruct1 = LLVM.ConstantOperand $ LLVMC.Undef (LLVM.NamedTypeReference dataTy)
+    -- Tag
+    tagStruct2 <- LLVMIR.insertValue tagStruct1 ctorIndex' [0]
+    -- Data pointer
+    let ctorTy = LLVM.NamedTypeReference ctorName
+    let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
+    -- Use offsets to calculate struct size
+    ctorStructSize <- flip LLVMIR.ptrtoint LLVM.i64
+                      =<< LLVMIR.gep nullptr
+                      =<< pure <$> LLVMIR.int32 0
+    -- Allocate memory for constructor.
+    -- For now, use "leak memory" as an implementation strategy for deallocation.
+    ctorStructPtr <- LLVMIR.call RT.mallocRef [(ctorStructSize, [])] >>=
+                     flip LLVMIR.bitcast (LLVM.ptr ctorTy)
+    values <- traverse jvalueCodegen args
+    indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
+    ptrOffset <- LLVMIR.int32 0
+    forM_ (indices `zip`  values) $ \(index, v) -> do
+      valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
+      LLVMIR.store valuePtr 0 v
+      pure ()
+    dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
+    fullyInit <- LLVMIR.insertValue tagStruct2 dataPtr [1]
+    pure fullyInit
+  CPrint -> case args of
+    [val] -> do
+      let fmtStr = encodeUtf8 (fromString "Print: %s\n\0")
+      let fmtStrLen = toInteger (BS.length fmtStr)
+      let fmtStrData = LLVMC.Int 8 . toInteger <$> BS.unpack fmtStr
+      fmtStrOper <- LLVMIR.array fmtStrData
+      fmtStrPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger fmtStrLen) LLVM.i8) Nothing 0
+      _ <- LLVMIR.store fmtStrPtr 0 fmtStrOper
+      printf <- gets tablePrintf
+      str <- jvalueCodegen val
+      exprCstring <- LLVMIR.call RT.stringCstringRef [(str, [])]
+      fmtStrPtr' <- LLVMIR.bitcast fmtStrPtr (LLVM.ptr LLVM.i8)
+      _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
+      LLVMIR.int64 0
+    _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
+  CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
+
+-- | Generates code for a [JExpr]
+jexprCodegen
+        :: AnnExpr '[ 'ExprType]
+        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
+jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
   where
-    go :: ExprF (TypedExpr, LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result)
-       -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) Result
-    go = \case
-      Lit l -> literalCodegen l
-      BinOp op (ex, x) (_, y) -> binOpCodegen op (annGetAnn (unfix ex)) x y
-      If (_, condInstr) (_, t1Instr) (_, t2Instr) -> do
-        LLVMIR.ensureBlock
-        cond <- joinPoint1 condInstr
-        trueLabel <- LLVMIR.freshName "if_then"
-        falseLabel <- LLVMIR.freshName "if_else"
-        LLVMIR.condBr cond trueLabel falseLabel
-        LLVMIR.emitBlockStart trueLabel
-        t1Res <- t1Instr >>= resultEnsureBranch
-        jp <- gets tableCurrentJoin
-        LLVMIR.br jp
-        LLVMIR.emitBlockStart falseLabel
-        t2Res <- t2Instr >>= resultEnsureBranch
-        LLVMIR.br jp
-        resultCombine t1Res t2Res
-      Cons name argPairs -> do
-        let args = snd <$> argPairs
-        -- Assume constructor exists, since typechecker should verify it anyways
-        (dataTy, ctorName, ctorIndex) <- asks (fromJust . Map.lookup name . tableCtors)
-        ctorIndex' <- LLVMIR.int32 (fromIntegral ctorIndex)
-        let tagStruct1 = LLVM.ConstantOperand $ LLVMC.Undef (LLVM.NamedTypeReference dataTy)
-        -- Tag
-        tagStruct2 <- LLVMIR.insertValue tagStruct1 ctorIndex' [0]
-        -- Data pointer
-        let ctorTy = LLVM.NamedTypeReference ctorName
-        let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
-        -- Use offsets to calculate struct size
-        ctorStructSize <- flip LLVMIR.ptrtoint LLVM.i64
-                          =<< LLVMIR.gep nullptr
-                          =<< pure <$> LLVMIR.int32 0
-        -- Allocate memory for constructor.
-        -- For now, use "leak memory" as an implementation strategy for deallocation.
-        ctorStructPtr <- LLVMIR.call RT.mallocRef [(ctorStructSize, [])] >>=
-                         flip LLVMIR.bitcast (LLVM.ptr ctorTy)
-        if null args
-          then pure ()
-          else do
-            values <- joinPoint (NE.fromList <$> sequence args)
-            indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
-            ptrOffset <- LLVMIR.int32 0
-            forM_ (indices `zip` NE.toList values) $ \(index, v) -> do
-              valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
-              LLVMIR.store valuePtr 0 v
-              pure ()
-        dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
-        fullyInit <- LLVMIR.insertValue tagStruct2 dataPtr [1]
-        pure $ resultValue fullyInit
-      Case branches (valExpr, valM) -> do
-        LLVMIR.ensureBlock
-        defLabel <- LLVMIR.freshName "case_default"
-        endLabel <- gets tableCurrentJoin
-        val <- joinPoint1 valM
-        allCaseLabels <- forM branches $ \case
-          BrAdt name _ _ ->
-            let labelName = "case_" <> fromString (Text.unpack name) in
-            (name, ) <$> LLVMIR.freshName labelName
-        -- Assume the symbol table and type information is correct
-        let dataName = fromJust $
-              case unfix . annGetAnn . unfix $ valExpr of { TyAdt n -> Just n; _ -> Nothing }
-        ctors <- asks ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
-        let ctorNames = ctorGetName <$> ctors
-        let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
-        let jumpTable = [(LLVMC.Int 32 i, l) | (i, (_, l)) <- usedLabelTriples]
-        tag <- LLVMIR.extractValue val [0]
-        dataPtr <- LLVMIR.extractValue val [1]
-        LLVMIR.switch tag defLabel jumpTable
-        resVals <- forM (usedLabelTriples `zip` branches) $ \((_, (ctorName, label)), br) -> do
-          let expr = snd (branchGetExpr br)
-          (_, ctorLLVMName, index) <- asks (fromJust . Map.lookup ctorName . tableCtors)
-          let Ctor _ argTys = ctors !! index
-          let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
-          LLVMIR.emitBlockStart label
-          ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
-          ctorPtrOffset <- LLVMIR.int32 0
-          bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, ty)) -> do
-            ctorPtrIndex <- LLVMIR.int32 i
-            -- Need to bitcast the ptr type because we need a concrete type. We
-            -- also need to load the data immediately because of how variables
-            -- are implemented.
-            v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
-                 >>= flip LLVMIR.bitcast (LLVM.ptr ty)
-                 >>= flip LLVMIR.load 0
-            pure (n, v)
-          let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
-          res <- local updateTable expr >>= resultEnsureBranch
-          LLVMIR.br endLabel
-          pure res
-        LLVMIR.emitBlockStart defLabel
-        LLVMIR.unreachable
-        foldM resultCombine (head resVals) (tail resVals)
-        -- resultCombine pure (sconcat (NE.fromList resVals))
-      Let name (_, valM) (_, exprM) -> do
-        val <- joinPoint1 valM
-        local (\t -> t { tableVars = Map.insert name val (tableVars t) }) exprM
-      Var name -> do
-        -- Assume codegen table is correct
-        value <- gets (fromJust . Map.lookup name . tableVars)
-        pure $ resultValue value
-      App name argsM -> do
-        args <- traverse joinPoint1 (snd <$> argsM)
-        -- Assume that name is callable (e.g. either a static function or a
-        -- function pointer)
-        fn <- fromJust <$> lookupName name
-        resultValue <$> LLVMIR.call fn [(a, []) | a <- args]
-      FunRef name -> do
-        fn <- gets (fromJust . Map.lookup name . tableFuns)
-        pure (resultValue fn)
-      Cast (origExpr, exprM) num -> do
-        let origNum = case unfix (annGetAnn (unfix origExpr)) of
-              TyNumber n -> n
-              _ -> error "codegen: attempting to cast non-numeric"
-        expr <- joinPoint1 exprM
-        resultValue <$> castOpCodegen origNum num expr
-      Print (_, exprM) -> do
-        let fmtStr = encodeUtf8 (fromString "Print: %s\n\0")
-        let fmtStrLen = toInteger (BS.length fmtStr)
-        let fmtStrData = LLVMC.Int 8 . toInteger <$> BS.unpack fmtStr
-        fmtStrOper <- LLVMIR.array fmtStrData
-        fmtStrPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger fmtStrLen) LLVM.i8) Nothing 0
-        _ <- LLVMIR.store fmtStrPtr 0 fmtStrOper
-        printf <- gets tablePrintf
-        str <- joinPoint1 exprM
-        exprCstring <- LLVMIR.call RT.stringCstringRef [(str, [])]
-        fmtStrPtr' <- LLVMIR.bitcast fmtStrPtr (LLVM.ptr LLVM.i8)
-        _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
-        retval <- LLVMIR.int64 0
-        pure $ resultValue retval
-    lookupName :: MonadState CodegenTable m
-               => Text
-               -> m (Maybe LLVM.Operand)
-    lookupName name =
-      gets $ \t ->
-        Map.lookup name (tableVars t) <|> Map.lookup name (tableFuns t)
+    go :: TypeF Type
+       -> JExprF (AnnExpr '[ 'ExprType ])
+       -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
+    go exprTy = \case
+      JVal v -> (v,) <$> jvalueCodegen v
+      JLet name val next -> do
+        oper <- jvalueCodegen val
+        _ <- bindVariable name exprTy oper
+        jexprCodegen next
+      JJoin lbl varName (Cfe expr cf) next -> do
+        llvmLabel <- LLVMIR.freshName (fromString (Text.unpack lbl))
+        let addJoinEntry t =
+              t { tableJoinValues = Map.insert lbl (llvmLabel, []) (tableJoinValues t) }
+        oldJoinEntries <- gets tableJoinValues
+        (lastVal, lastValOper) <- jexprCodegen expr
+        _ <- localCodegenTable addJoinEntry (controlFlowCodegen lastVal lastValOper cf)
+        (_, joinValues) <- gets (fromJust . Map.lookup lbl . tableJoinValues)
+        modify (\t -> t { tableJoinValues = oldJoinEntries })
+        LLVMIR.emitBlockStart llvmLabel
+        op <- LLVMIR.phi joinValues
+        bindVariable varName exprTy op
+        jexprCodegen next
+      JApp varName callable args next -> do
+        oper <- callableCodegen callable args
+        bindVariable varName exprTy oper
+        jexprCodegen next
 
 -- | Generates code for numeric casting
 castOpCodegen :: LLVMIR.MonadIRBuilder m => Numeric -> Numeric -> LLVM.Operand -> m LLVM.Operand
@@ -457,7 +466,7 @@ adtToLLVM adtName ctors = do
 funToLLVM :: Text
            -> [(Text, Type)]
            -> Type
-           -> TypedExpr
+           -> AnnExpr '[ 'ExprType ]
            -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
 funToLLVM name params ty body =
     let name' = if name == "main" then "__simpl_main" else name
@@ -466,28 +475,25 @@ funToLLVM name params ty body =
         fparams = [(typeToLLVM t, fromString (Text.unpack n)) | (n, t) <- params]
     in mdo foper <- LLVMIR.function fname fparams ftype $ \args -> do
              LLVMIR.ensureBlock
-             endLabel <- LLVMIR.freshName "function_end"
              -- We need to make sure we don't pollute other function scopes
              oldVars <- gets tableVars
-             let updVars t = tableVars t `Map.union` Map.fromList ((fst <$> params) `zip` args)
-             modify (\t -> t { tableCurrentJoin = endLabel
-                             , tableFuns = Map.insert name foper (tableFuns t)
+             let updVars t = tableVars t `Map.union` Map.fromList [(n, (unfix vty, op)) | ((n, vty), op) <- params `zip` args]
+             modify (\t -> t { tableFuns = Map.insert name foper (tableFuns t)
                              , tableVars = updVars t })
-             retval <- joinPoint1 (exprCodegen body)
+             (_, retval) <- jexprCodegen body
              -- Restore old scope
              modify (\t -> t { tableVars = oldVars })
              LLVMIR.ret retval
            pure foper
 
 -- | Generate code for the entire module
-moduleCodegen :: [Decl Expr]
-             -> SymbolTable TypedExpr
+moduleCodegen :: String
+             -> SymbolTable (AnnExpr '[ 'ExprType ])
              -> LLVMIR.ModuleBuilderT Codegen ()
-moduleCodegen decls symTab = mdo
+moduleCodegen srcCode symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
   (_, resultFmt) <- staticString ".resultformat" "Result: %i\n"
-  let srcCode = unlines $ show . pretty <$> decls
   (_, exprSrc) <- staticString ".sourcecode" $ "Source code: " ++ srcCode ++ "\n"
   RT.emitRuntimeDecls
   modify (\t -> t { tablePrintf = RT.printfRef })
@@ -512,10 +518,10 @@ moduleCodegen decls symTab = mdo
     LLVMIR.ret retcode
   pure ()
 
-runCodegen :: CompilerOpts -> [Decl Expr] -> SymbolTable TypedExpr -> LLVM.Module
-runCodegen opts decls symTab
+runCodegen :: CompilerOpts -> String -> SymbolTable (AnnExpr '[ 'ExprType]) -> LLVM.Module
+runCodegen opts srcCode symTab
   = runIdentity
   . flip evalStateT emptyCodegenTable
   . unCodegen
   . LLVMIR.buildModuleT "simpl.ll"
-  $ lift (initCodegenTable opts symTab) >> moduleCodegen decls symTab
+  $ lift (initCodegenTable opts symTab) >> moduleCodegen srcCode symTab

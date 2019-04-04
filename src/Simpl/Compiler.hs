@@ -4,16 +4,19 @@
 module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Text.Prettyprint.Doc (pretty)
 
 import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
 import LLVM.Context
 
 import Simpl.Ast
+import Simpl.AstToJoinIR
 import Simpl.Backend.Codegen (runCodegen)
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
+import Simpl.JoinIR.Syntax (unannotate)
 import Paths_simpl_lang
 
 -- | Main error type, aggregating all error types.
@@ -53,4 +56,10 @@ fullCompilerPipeline options srcFile@(SourceFile _name decls) =
     let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns symTable
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)
-    pure $ runCodegen options decls typedSymTable
+    let jSymTable = astToJoinIR typedSymTable
+    -- TODO: Add compiler flag to dump JoinIR
+    -- liftIO $ forM_ (symTabFuns jSymTable) $ \(args, ty, expr) -> do
+    --   print (pretty args <> pretty " :: " <> pretty ty)
+    --   print (pretty (unannotate expr))
+    let srcCode = unlines [show (pretty d) | d <- decls]
+    pure $ runCodegen options srcCode jSymTable

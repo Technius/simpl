@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
@@ -42,6 +43,15 @@ symTabMapExprs :: (([(Text, Type)], Type, e) -> ([(Text, Type)], Type, e')) -- ^
                -> SymbolTable e
                -> SymbolTable e'
 symTabMapExprs f t = t { symTabFuns = Map.map f (symTabFuns t) }
+
+symTabTraverseExprs
+  :: Monad m
+  => (([(Text, Type)], Type, e) -> ([(Text, Type)], Type, m e')) -- ^ Map over functions
+  -> SymbolTable e
+  -> m (SymbolTable e')
+symTabTraverseExprs f t = do
+  upd <- traverse ((\(args, ty, me) -> (args, ty,) <$> me) . f) (symTabFuns t)
+  pure $ t { symTabFuns = upd }
 
 -- | Searches for the given constructor, returning the name of the ADT, the
 -- constructor, and the index of the constructor.
