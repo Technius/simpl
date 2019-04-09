@@ -21,6 +21,7 @@ import Data.Functor.Identity
 import Data.Text (Text)
 import Data.String (fromString)
 
+import Simpl.Annotation hiding (AnnExprF, AnnExpr)
 import Simpl.Ast (Type)
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
@@ -28,7 +29,7 @@ import qualified Simpl.JoinIR.Syntax as J
 
 -- * Public API
 
-astToJoinIR :: SymbolTable (A.AnnExpr Type) -> SymbolTable (J.AnnExpr '[ 'J.ExprType])
+astToJoinIR :: SymbolTable (A.AnnExpr Type) -> SymbolTable (J.AnnExpr '[ 'ExprType])
 astToJoinIR = runTransform transformTable
 
 -- * Transformation Monad
@@ -79,9 +80,9 @@ freshLabel = freshName "join" symTabLookupFun
 -- * Private utility functions
 
 makeJexpr :: Type
-          -> J.JExprF (J.AnnExpr '[ 'J.ExprType])
-          -> J.AnnExpr '[ 'J.ExprType]
-makeJexpr ty = Fix . J.addField (J.withType ty) . J.toAnnExprF
+          -> J.JExprF (J.AnnExpr '[ 'ExprType])
+          -> J.AnnExpr '[ 'ExprType]
+makeJexpr ty = Fix . addField (withType ty) . toAnnExprF
 
 astType :: A.AnnExpr Type -> Type
 astType = A.annGetAnn . unfix
@@ -90,7 +91,7 @@ astType = A.annGetAnn . unfix
 
 -- | Perform ANF transformation on the given symbol table
 transformTable :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-               => m (SymbolTable (J.AnnExpr '[ 'J.ExprType]))
+               => m (SymbolTable (J.AnnExpr '[ 'ExprType]))
 transformTable = do
   table <- ask
   symTabTraverseExprs (\(args, ty, expr) -> (args, ty, transformExpr expr)) table
@@ -98,14 +99,14 @@ transformTable = do
 -- | Perform ANF transformation on the given expression
 transformExpr :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
               => A.AnnExpr Type
-              -> m (J.AnnExpr '[ 'J.ExprType])
+              -> m (J.AnnExpr '[ 'ExprType])
 transformExpr expr = anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
 
 -- | Perform ANF transformation on the branch, afterwards handling control flow.
 transformBranch :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-                => J.ControlFlow (J.AnnExpr '[ 'J.ExprType]) -- ^ Control flow handler
+                => J.ControlFlow (J.AnnExpr '[ 'ExprType]) -- ^ Control flow handler
                 -> A.Branch (A.AnnExpr Type) -- ^ Branches
-                -> m (J.JBranch (J.AnnExpr '[ 'J.ExprType]))
+                -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
 transformBranch cf (A.BrAdt adtName argNames expr) = do
   jexpr <- anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
   pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
@@ -116,8 +117,8 @@ transformBranch cf (A.BrAdt adtName argNames expr) = do
 -- continuation to produce the resulting JoinIR AST.
 anfTransform :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
              => A.AnnExpr Type -- ^ Expression to translate
-             -> (J.JValue -> m (J.AnnExpr '[ 'J.ExprType])) -- ^ Continuation
-             -> m (J.AnnExpr '[ 'J.ExprType])
+             -> (J.JValue -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
+             -> m (J.AnnExpr '[ 'ExprType])
 anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
   A.Lit lit -> cont (J.JLit lit)
   A.Var name -> cont (J.JVar name)
@@ -183,8 +184,8 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
 -- continuation with the expression values.
 collectArgs :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
             => [A.AnnExpr Type] -- ^ Argument expressions
-            -> ([J.JValue] -> m (J.AnnExpr '[ 'J.ExprType])) -- ^ Continuation
-            -> m (J.AnnExpr '[ 'J.ExprType])
+            -> ([J.JValue] -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
+            -> m (J.AnnExpr '[ 'ExprType])
 collectArgs = go []
   where
     go vals [] mcont = mcont (reverse vals)

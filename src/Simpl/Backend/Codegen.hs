@@ -44,6 +44,7 @@ import qualified LLVM.IRBuilder.Monad as LLVMIR
 import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
+import Simpl.Annotation hiding (AnnExpr, AnnExprF)
 import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable

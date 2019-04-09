@@ -3,12 +3,12 @@
 module JoinVerifySpec
   (joinVerifyTests) where
 
-import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Functor.Foldable (Fix(..))
 import Test.Tasty
 import Test.Tasty.HUnit
-import Simpl.Ast (Type, TypeF(..), Literal(..), Numeric(..))
+import Simpl.Annotation hiding (AnnExpr, AnnExprF)
+import Simpl.Ast (Literal(..))
 import Simpl.JoinIR.Syntax
 import Simpl.JoinIR.Verify
 

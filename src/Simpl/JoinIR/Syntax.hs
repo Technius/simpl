@@ -1,21 +1,12 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
--- Vinyl stuff
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE ConstraintKinds #-}
 
 {-|
 Module      : Simpl.JoinIR.Syntax
@@ -30,12 +21,10 @@ module Simpl.JoinIR.Syntax where
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))
 import qualified Data.Text.Prettyprint.Doc as PP
-import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..), Type)
+import qualified Simpl.Annotation as Ann
+import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..))
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
-import qualified Data.Vinyl as V
-import qualified Data.Vinyl.TypeLevel as V
-import Data.Singletons.TH (genSingletons)
 
 type Name = Text
 
@@ -189,67 +178,6 @@ instance Pretty a => Pretty (Cfe a) where
 -- type at each node. Thus, we can add annotations by extending the record with
 -- more fields.
 
--- | Possible annotations on a [JExpr]
-data JFields = ExprType deriving (Show)
-
-genSingletons [ ''JFields ]
-
--- | Maps each possible annotation label to a type
-type family ElF (f :: JFields) :: * where
-  ElF 'ExprType = Type
-
--- | Wrapper for annotation fields
-newtype Attr f = Attr { _unAttr :: ElF f }
-
-deriving instance Show (Attr 'ExprType)
-
--- | Helper function for create annotation fields
-(=::) :: sing f -> ElF f -> Attr f
-_ =:: x = Attr x
-
--- | Annotations for a typed [JExpr]
-type Typed = '[ 'ExprType ]
-
--- | Creates a type field whose value is the given type
-withType :: Type -> Attr 'ExprType
-withType ty = SExprType =:: ty
-
 -- | A [JExprF] annotated with some data.
-data AnnExprF fields a = AnnExprF { annGetAnn :: V.Rec Attr fields, annGetExpr :: JExprF a }
-  deriving (Functor, Foldable, Traversable)
-
-type AnnExpr fields = Fix (AnnExprF fields)
-
--- | Converts a [JExprF] to an "unannotated" [AnnExprF]
-toAnnExprF :: JExprF a -> AnnExprF '[] a
-toAnnExprF expr = AnnExprF { annGetAnn = V.RNil, annGetExpr = expr }
-
--- | Converts a [JExpr] to an "unannotated" [AnnExpr]
-toAnnExpr :: JExpr -> AnnExpr '[]
-toAnnExpr expr = cata (Fix . toAnnExprF) expr
-
--- | Removes all annotations from an [AnnExpr]
-unannotate :: AnnExpr fields -> JExpr
-unannotate = cata (Fix . annGetExpr)
-
--- | Adds the given annotation to the expression
-addField :: Attr f -> AnnExprF flds a -> AnnExprF (f ': flds) a
-addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
-
-type HasType fields = V.RElem 'ExprType fields (V.RIndex 'ExprType fields)
-
--- | Retrieves the type information stored in a typed [AnnExprF]
-getType :: HasType fields => AnnExprF fields a -> Type
-getType = _unAttr . V.rget @'ExprType . annGetAnn
-
--- * Misc
-
--- | Helper for inspecting an [AnnExpr]
-newtype PrettyJExprF a = PrettyJExprF (String, JExprF a) deriving (Show)
-type PrettyJExpr = Fix PrettyJExprF
-$(deriveShow1 ''PrettyJExprF)
-
--- | Converts an [AnnExpr] into a [PrettyJExpr] so that it can be shown.
-prettyAnnExpr :: Show (V.Rec Attr fields) => AnnExpr fields -> PrettyJExpr
-prettyAnnExpr = cata $ \expr ->
-  Fix (PrettyJExprF (show (annGetAnn expr), annGetExpr expr))
+type AnnExprF fields a = Ann.AnnExprF JExprF fields a
+type AnnExpr fields = Ann.AnnExpr JExprF fields

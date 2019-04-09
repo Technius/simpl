@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TupleSections #-}
 module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
@@ -10,13 +9,13 @@ import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
 import LLVM.Context
 
+import Simpl.Annotation (unannotate)
 import Simpl.Ast
 import Simpl.AstToJoinIR
 import Simpl.Backend.Codegen (runCodegen)
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
 import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
-import Simpl.JoinIR.Syntax (unannotate)
 import Paths_simpl_lang
 
 -- | Main error type, aggregating all error types.
