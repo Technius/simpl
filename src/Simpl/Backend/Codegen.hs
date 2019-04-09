@@ -48,7 +48,7 @@ import Simpl.Annotation hiding (AnnExpr, AnnExprF)
 import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Typing (literalType)
+import Simpl.Typecheck (literalType)
 import Simpl.Backend.Runtime ()
 import Simpl.JoinIR.Syntax
 import qualified Simpl.Backend.Runtime as RT

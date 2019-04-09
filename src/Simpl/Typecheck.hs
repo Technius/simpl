@@ -3,7 +3,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-module Simpl.Typing where
+module Simpl.Typecheck where
 
 import Control.Applicative (liftA2)
 import Control.Monad (when, foldM, forM, zipWithM)

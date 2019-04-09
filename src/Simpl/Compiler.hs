@@ -15,7 +15,7 @@ import Simpl.AstToJoinIR
 import Simpl.Backend.Codegen (runCodegen)
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Typing (TypeError, runTypecheck, checkType, withExtraVars)
+import Simpl.Typecheck (TypeError, runTypecheck, checkType, withExtraVars)
 import Paths_simpl_lang
 
 -- | Main error type, aggregating all error types.
