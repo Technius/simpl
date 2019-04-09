@@ -15,6 +15,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 {-|
 Module      : Simpl.JoinIR.Syntax
@@ -235,8 +236,10 @@ unannotate = cata (Fix . annGetExpr)
 addField :: Attr f -> AnnExprF flds a -> AnnExprF (f ': flds) a
 addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
 
+type HasType fields = V.RElem 'ExprType fields (V.RIndex 'ExprType fields)
+
 -- | Retrieves the type information stored in a typed [AnnExprF]
-getType :: V.RElem 'ExprType fields (V.RIndex 'ExprType fields) => AnnExprF fields a -> Type
+getType :: HasType fields => AnnExprF fields a -> Type
 getType = _unAttr . V.rget @'ExprType . annGetAnn
 
 -- * Misc

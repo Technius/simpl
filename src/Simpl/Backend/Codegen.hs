@@ -126,7 +126,7 @@ bindVariable :: MonadState CodegenTable m
 bindVariable name ty oper =
   modify (\t -> t { tableVars = Map.insert name (ty, oper) (tableVars t) })
 
-initCodegenTable :: CompilerOpts -> SymbolTable (AnnExpr '[ 'ExprType ]) -> Codegen ()
+initCodegenTable :: CompilerOpts -> SymbolTable (AnnExpr fields) -> Codegen ()
 initCodegenTable options symTab = do
   let adts = flip Map.mapWithKey (symTabAdts symTab) $ \name (ty, ctors) -> (llvmName name, ty, ctors)
   ctors <- forM (Map.elems adts) $ \(adtName, _, ctors) ->
@@ -246,9 +246,10 @@ jvalueCodegen = \case
 
 -- | Generates code for a CFE.
 controlFlowCodegen
-        :: JValue -- ^ The value to continue control flow with.
+        :: HasType fields
+        => JValue -- ^ The value to continue control flow with.
         -> LLVM.Operand -- ^ The LLVM operand of the value.
-        -> ControlFlow (AnnExpr '[ 'ExprType]) -- ^ The control flow continuation.
+        -> ControlFlow (AnnExpr fields) -- ^ The control flow continuation.
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) ()
 controlFlowCodegen val valOper = \case
   JIf (Cfe trueBr trueCf) (Cfe falseBr falseCf) -> do
@@ -382,12 +383,14 @@ callableCodegen callable args = case callable of
 
 -- | Generates code for a [JExpr]
 jexprCodegen
-        :: AnnExpr '[ 'ExprType]
+        :: HasType fields
+        => AnnExpr fields
         -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
 jexprCodegen = (\e -> go (unfix (getType e)) (annGetExpr e)) . unfix
   where
-    go :: TypeF Type
-       -> JExprF (AnnExpr '[ 'ExprType ])
+    go :: HasType fields
+       => TypeF Type
+       -> JExprF (AnnExpr fields)
        -> LLVMIR.IRBuilderT (LLVMIR.ModuleBuilderT Codegen) (JValue, LLVM.Operand)
     go exprTy = \case
       JVal v -> (v,) <$> jvalueCodegen v
@@ -463,11 +466,12 @@ adtToLLVM adtName ctors = do
     LLVMIR.typedef ctorLLVMName (Just ctorType)
 
 -- | Emits the given function definition
-funToLLVM :: Text
-           -> [(Text, Type)]
-           -> Type
-           -> AnnExpr '[ 'ExprType ]
-           -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
+funToLLVM :: HasType fields
+          => Text
+          -> [(Text, Type)]
+          -> Type
+          -> AnnExpr fields
+          -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
 funToLLVM name params ty body =
     let name' = if name == "main" then "__simpl_main" else name
         ftype = typeToLLVM ty
@@ -487,9 +491,10 @@ funToLLVM name params ty body =
            pure foper
 
 -- | Generate code for the entire module
-moduleCodegen :: String
-             -> SymbolTable (AnnExpr '[ 'ExprType ])
-             -> LLVMIR.ModuleBuilderT Codegen ()
+moduleCodegen :: HasType fields
+              => String
+              -> SymbolTable (AnnExpr fields)
+              -> LLVMIR.ModuleBuilderT Codegen ()
 moduleCodegen srcCode symTab = mdo
   -- Message is "Hi\n" (with null terminator)
   (_, msg) <- staticString ".message" "Hello world!\n"
@@ -518,7 +523,7 @@ moduleCodegen srcCode symTab = mdo
     LLVMIR.ret retcode
   pure ()
 
-runCodegen :: CompilerOpts -> String -> SymbolTable (AnnExpr '[ 'ExprType]) -> LLVM.Module
+runCodegen :: HasType fields => CompilerOpts -> String -> SymbolTable (AnnExpr fields) -> LLVM.Module
 runCodegen opts srcCode symTab
   = runIdentity
   . flip evalStateT emptyCodegenTable
