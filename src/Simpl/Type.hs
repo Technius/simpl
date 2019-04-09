@@ -9,7 +9,8 @@
 
 module Simpl.Type where
 
-import Control.Unification (Unifiable, zipMatch)
+import Control.Unification (Unifiable, zipMatch, UTerm)
+import Control.Unification.IntVar (IntVar)
 import Data.Functor.Foldable (Fix(Fix), para)
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
@@ -81,3 +82,8 @@ instance Pretty Type where
       go (TyAdt n) = pretty n
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
+
+-- | Unification variable
+type UVar = IntVar
+-- | Unification type
+type UType = UTerm TypeF UVar

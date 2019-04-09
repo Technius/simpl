@@ -1,8 +1,11 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeOperators #-}
 module Simpl.Typecheck where
 
 import Control.Applicative (liftA2)
@@ -16,16 +19,13 @@ import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
 import qualified Data.Map as Map
+import Data.Vinyl (Rec((:&)))
 
 import Simpl.Ast
 import Simpl.SymbolTable
 import Simpl.Type
-
-type UVar = IntVar
-type UType = UTerm TypeF UVar
-
-type TCExpr = AnnExpr UType
-type TypedExpr = AnnExpr Type
+import Simpl.Annotation hiding (AnnExprF, AnnExpr)
+import qualified Simpl.Annotation as Ann
 
 data TypeError
   = TyErrOccurs UVar UType
@@ -69,20 +69,21 @@ literalType = \case
   LitString _ -> TyString
 
 -- | Annotate every AST node with a unification meta variable
-attachExprMetaVar :: Expr -> Typecheck TCExpr
-attachExprMetaVar = cataM (\e -> Fix . flip AnnExprF e <$> mkMetaVar)
+attachExprMetaVar :: AnnExpr fields -> Typecheck (AnnExpr ('TCType ': fields))
+attachExprMetaVar = cataM (\e -> Fix . flip addField e . withUType <$> mkMetaVar)
 
 -- | Resolve all unification variables, returning a well-typed AST
-tcExprToTypedExpr :: TCExpr -> Typecheck TypedExpr
+tcExprToTypedExpr :: HasUType fields => AnnExpr fields -> Typecheck (AnnExpr ('ExprType ': fields))
 tcExprToTypedExpr =
-  cataM $ \(AnnExprF uty expr) ->
+  cataM $ \ae ->
+    let uty = getUType ae in
     utypeToType <$> forceBindings uty >>= \case
-      Just ty -> pure . Fix $ AnnExprF ty expr
+      Just ty -> pure . Fix $ addField (withType ty) ae
       Nothing -> throwError $ TyErrAmbiguousType uty
 
-inferType :: Expr -> Typecheck TCExpr
-inferType = cata $ \case
-  Lit l -> pure $ annotate (Lit l) (UTerm (literalType l))
+inferType :: AnnExpr fields -> Typecheck (AnnExpr ('TCType ': fields))
+inferType = cata $ \ae -> case annGetExpr ae of
+  Lit l -> pure $ annotate (Lit l) (annGetAnn ae) (UTerm (literalType l))
   BinOp op x y ->
     let tyNumUnknown = UTerm (TyNumber NumUnknown)
         tyBool = UTerm TyBool
@@ -94,13 +95,13 @@ inferType = cata $ \case
           Lt -> (tyBool, False)
           Lte -> (tyBool, False)
           Equal -> (tyBool, False)
-    in typecheckBinop op resTy unifyResWithArgs x y
+    in typecheckBinop op resTy (annGetAnn ae) unifyResWithArgs x y
   If condM t1M t2M -> do
     cond <- condM
     _ <- unifyTy (extractTy cond) (UTerm TyBool)
     (t1, t2) <- liftA2 (,) t1M t2M
     resTy <- unifyTy (extractTy t1) (extractTy t2)
-    pure $ annotate (If cond t1 t2) resTy
+    pure $ annotate (If cond t1 t2) (annGetAnn ae) resTy
   Cons name argsM -> do
     args <- sequence argsM
     let argTys = extractTy <$> args
@@ -112,7 +113,7 @@ inferType = cata $ \case
         when (numConArgs /= length argTys) $
           throwError $ TyErrArgCount numConArgs (length argTys) ctorArgTys
         traverse_ (uncurry unifyTy) (zip conArgs argTys)
-        pure $ annotate (Cons name args) (typeToUtype adtTy)
+        pure $ annotate (Cons name args) (annGetAnn ae) (typeToUtype adtTy)
       Nothing -> throwError $ TyErrNoSuchCtor name
   Case branchMs valM -> do
     val <- valM
@@ -131,18 +132,18 @@ inferType = cata $ \case
           Nothing -> throwError $ TyErrNoSuchCtor ctorName
     let brTys = extractTy . branchGetExpr <$> branches
     resTy <- mkMetaVar
-    annotate (Case branches val) <$> foldM unifyTy resTy brTys
+    annotate (Case branches val) (annGetAnn ae) <$> foldM unifyTy resTy brTys
   Let name valM nextM -> do
     val <- valM
     -- TODO: Hack, fix this
     case utypeToType (extractTy val) of
       Just ty -> do
         next <- local (symTabInsertVar name ty) nextM
-        pure $ annotate (Let name val next) (extractTy next)
+        pure $ annotate (Let name val next) (annGetAnn ae) (extractTy next)
       Nothing -> throwError $ TyErrAmbiguousType (extractTy val)
   Var name ->
     asks (symTabLookupVar name) >>= \case
-      Just ty -> pure $ annotate (Var name) (typeToUtype ty)
+      Just ty -> pure $ annotate (Var name) (annGetAnn ae) (typeToUtype ty)
       Nothing -> throwError $ TyErrNoSuchVar name
   App name args -> do
     -- TODO: Improve error reporting here. If indirect call, then variable type
@@ -156,47 +157,50 @@ inferType = cata $ \case
     when (numParams /= paramCount) $
       throwError $ TyErrArgCount numParams paramCount params
     let unifyExprTy expr pTy =
-          annotate (annGetExpr (unfix expr)) <$> unifyTy (extractTy expr) pTy
+          annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
     -- Check parameter types
     params' <- zipWithM unifyExprTy argsTc (typeToUtype <$> params)
     -- Annotate with result type
-    pure $ annotate (App name params') (typeToUtype ty)
+    pure $ annotate (App name params') (annGetAnn ae) (typeToUtype ty)
   FunRef name ->
     asks (symTabLookupFun name) >>= \case
       Just (params, ty, _) ->
         let paramTys = snd <$> params in
-          pure $ annotate (FunRef name) (typeToUtype (Fix $ TyFun paramTys ty))
+          pure $ annotate (FunRef name) (annGetAnn ae) (typeToUtype (Fix $ TyFun paramTys ty))
       Nothing -> throwError $ TyErrNoSuchVar name
   Cast exprM num -> do
     expr <- exprM
     let ty = extractTy expr
     ty' <- unifyTy ty (UTerm (TyNumber NumUnknown))
-    let expr' = annotate (annGetExpr . unfix $ expr) ty'
-    pure $ annotate (Cast expr' num) (UTerm (TyNumber num))
+    let expr' = annotate (annGetExpr . unfix $ expr) (annGetAnn ae) ty'
+    pure $ annotate (Cast expr' num) (annGetAnn ae) (UTerm (TyNumber num))
   Print exprM -> do
     expr <- exprM
     let ty = extractTy expr
     _ <- unifyTy ty (UTerm TyString)
-    pure $ annotate (Print expr) (UTerm (TyNumber NumInt))
+    pure $ annotate (Print expr) (annGetAnn ae) (UTerm (TyNumber NumInt))
   where
-    annotate :: ExprF TCExpr -> UType -> TCExpr
-    annotate expfTc ty = Fix $ AnnExprF ty expfTc
+    annotate :: ExprF (AnnExpr ('TCType ': fields)) -> AnnRec fields -> UType -> AnnExpr ('TCType ': fields)
+    annotate expfTc fields ty = Fix $ Ann.AnnExprF
+      { annGetAnn = withUType ty :& fields
+      , annGetExpr = expfTc }
 
-    extractTy :: TCExpr -> UType
-    extractTy = annGetAnn . unfix
+    extractTy :: HasUType fields => AnnExpr fields -> UType
+    extractTy = getUType . unfix
 
     typecheckBinop :: BinaryOp -- ^ Operator
                    -> UType -- ^ Result type
+                   -> AnnRec fields -- ^ Annotation fields
                    -> Bool -- ^ Whether result type should be unified with arguments
-                   -> Typecheck TCExpr
-                   -> Typecheck TCExpr
-                   -> Typecheck TCExpr
-    typecheckBinop op resultTy unifyArgResult xm ym = do
+                   -> Typecheck (AnnExpr ('TCType ': fields))
+                   -> Typecheck (AnnExpr ('TCType ': fields))
+                   -> Typecheck (AnnExpr ('TCType ': fields))
+    typecheckBinop op resultTy annFields unifyArgResult xm ym = do
       (x, y) <- liftA2 (,) xm ym
       xTy <- unifyTy (extractTy x) (UTerm (TyNumber NumUnknown))
       yTy <- unifyTy (extractTy y) xTy
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
-      pure $ annotate (BinOp op x y) rTy
+      pure $ annotate (BinOp op x y) annFields rTy
 
     lookupFun :: Text -> [UType] -> Typecheck ([Type], Type)
     lookupFun name argTys =
@@ -214,14 +218,14 @@ inferType = cata $ \case
             Just (params, resTy, _) -> pure (snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 
-checkType :: Type -> Expr -> Typecheck TypedExpr
+checkType :: Type -> AnnExpr fields -> Typecheck (AnnExpr ('ExprType ': 'TCType ': fields))
 checkType ty expr = do
   typedExpr <- inferType expr
-  _ <- unifyTy (annGetAnn . unfix $ typedExpr) (typeToUtype ty)
+  _ <- unifyTy (getUType . unfix $ typedExpr) (typeToUtype ty)
   tcExprToTypedExpr typedExpr
 
-withExtraVars :: [(Text, Type)] -> Typecheck TypedExpr -> Typecheck TypedExpr
-withExtraVars vars action = local (symTabInsertVars vars) action
+withExtraVars :: [(Text, Type)] -> Typecheck (AnnExpr fields) -> Typecheck (AnnExpr fields)
+withExtraVars vars = local (symTabInsertVars vars)
 
 runTypecheck :: SymbolTable Expr -> Typecheck a -> Either TypeError a
 runTypecheck ctx
@@ -249,5 +253,5 @@ typeToUtype = cata $ \case
 getTypeOf :: Expr -> Either TypeError Type
 getTypeOf expr =
   let table = buildSymbolTable (SourceFile "" [])
-      tcAction = inferType expr >>= tcExprToTypedExpr in
-  runTypecheck table (annGetAnn . unfix <$> tcAction)
+      tcAction = inferType (toAnnExpr expr) >>= tcExprToTypedExpr in
+  runTypecheck table (getType . unfix <$> tcAction)

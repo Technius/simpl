@@ -12,6 +12,7 @@ import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
 import Text.Show.Deriving (deriveShow1)
 
+import qualified Simpl.Annotation as Ann
 import Simpl.Type
 
 -- * AST Type
@@ -186,10 +187,8 @@ $(deriveShow1 ''Branch)
 $(deriveShow1 ''ExprF)
 
 -- | An [Expr] annotated with some data.
-data AnnExprF ann a = AnnExprF { annGetAnn :: ann, annGetExpr :: ExprF a }
-  deriving (Functor, Foldable, Traversable)
-
-type AnnExpr ann = Fix (AnnExprF ann)
+type AnnExprF = Ann.AnnExprF ExprF
+type AnnExpr fields = Ann.AnnExpr ExprF fields
 
 -- | Catamorphism to a monadic value
 cataM :: (Monad m, Traversable f) => (f a -> m a) -> Fix f -> m a

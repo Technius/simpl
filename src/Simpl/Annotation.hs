@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -26,7 +28,7 @@ import qualified Data.Vinyl.TypeLevel as V
 import Data.Singletons.TH (genSingletons)
 import Text.Show.Deriving (deriveShow1)
 
-import Simpl.Type (Type)
+import Simpl.Type (Type, UType)
 
 -- * Annotated expressions
 --
@@ -36,13 +38,14 @@ import Simpl.Type (Type)
 -- more fields.
 
 -- | Possible annotations
-data Fields = ExprType deriving (Show)
+data Fields = ExprType | TCType deriving (Show)
 
 genSingletons [ ''Fields ]
 
 -- | Maps each possible annotation label to a type
 type family ElF (f :: Fields) :: * where
   ElF 'ExprType = Type
+  ElF 'TCType = UType
 
 -- | Wrapper for annotation fields
 newtype Attr f = Attr { _unAttr :: ElF f }
@@ -53,14 +56,14 @@ deriving instance Show (Attr 'ExprType)
 (=::) :: sing f -> ElF f -> Attr f
 _ =:: x = Attr x
 
--- | Creates a type field whose value is the given type
-withType :: Type -> Attr 'ExprType
-withType ty = SExprType =:: ty
+type AnnRec fields = V.Rec Attr fields
 
 -- | A [JExprF] annotated with some data.
-data AnnExprF expr fields a = AnnExprF { annGetAnn :: V.Rec Attr fields, annGetExpr :: expr a }
+data AnnExprF expr fields a = AnnExprF { annGetAnn :: AnnRec fields, annGetExpr :: expr a }
 
 deriving instance Functor expr => Functor (AnnExprF expr fields)
+deriving instance Foldable expr => Foldable (AnnExprF expr fields)
+deriving instance Traversable expr => Traversable (AnnExprF expr fields)
 
 type AnnExpr expr fields = Fix (AnnExprF expr fields)
 
@@ -80,11 +83,27 @@ unannotate = cata (Fix . annGetExpr)
 addField :: Attr f -> AnnExprF expr flds a -> AnnExprF expr (f ': flds) a
 addField attr expr = expr { annGetAnn = attr V.:& annGetAnn expr }
 
+-- * Field-specific helpers
+
 type HasType fields = V.RElem 'ExprType fields (V.RIndex 'ExprType fields)
 
 -- | Retrieves the type information stored in a typed [AnnExprF]
 getType :: HasType fields => AnnExprF expr fields a -> Type
 getType = _unAttr . V.rget @'ExprType . annGetAnn
+
+type HasUType fields = V.RElem 'TCType fields (V.RIndex 'TCType fields)
+
+-- | Retrieves the unification variable information stored in a typechecking [AnnExprF]
+getUType :: HasUType fields => AnnExprF expr fields a -> UType
+getUType = _unAttr . V.rget @'TCType . annGetAnn
+
+-- | Creates a type field whose value is the given type
+withType :: Type -> Attr 'ExprType
+withType ty = SExprType =:: ty
+
+-- | Creates a type field whose value is the given type
+withUType :: UType -> Attr 'TCType
+withUType ty = STCType =:: ty
 
 -- * Misc
 

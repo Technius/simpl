@@ -1,21 +1,24 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Text.Prettyprint.Doc (pretty)
+import Data.Text (Text)
 
 import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
 import LLVM.Context
 
-import Simpl.Annotation (unannotate)
+import Simpl.Annotation (unannotate, toAnnExpr, Fields(..))
 import Simpl.Ast
 import Simpl.AstToJoinIR
 import Simpl.Backend.Codegen (runCodegen)
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Typecheck (TypeError, runTypecheck, checkType, withExtraVars)
+import Simpl.Type (Type)
+import Simpl.Typecheck (TypeError, runTypecheck, checkType, withExtraVars, Typecheck)
 import Paths_simpl_lang
 
 -- | Main error type, aggregating all error types.
@@ -51,7 +54,6 @@ fullCompilerPipeline :: CompilerOpts -> SourceFile Expr -> IO (Either CompilerEr
 fullCompilerPipeline options srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
     symTable <- get
-    let tycheckFuns (params, ty, expr) = (params, ty, withExtraVars params (checkType ty expr))
     let newSTTypecheck = sequence $ symTabMapExprs tycheckFuns symTable
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)
@@ -62,3 +64,8 @@ fullCompilerPipeline options srcFile@(SourceFile _name decls) =
     --   print (pretty (unannotate expr))
     let srcCode = unlines [show (pretty d) | d <- decls]
     pure $ runCodegen options srcCode jSymTable
+  where
+    tycheckFuns :: ([(Text, Type)], Type, Expr)
+                -> ([(Text, Type)], Type, Typecheck (AnnExpr ['ExprType, 'TCType]))
+    tycheckFuns (params, ty, expr) =
+      (params, ty, withExtraVars params (checkType ty (toAnnExpr expr)))

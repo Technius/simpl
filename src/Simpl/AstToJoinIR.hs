@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
@@ -5,6 +7,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-|
 Module      : Simpl.AstToJoinIR
 Description : Provides a function to normalize SimPL AST, transforming it into
@@ -21,7 +24,7 @@ import Data.Functor.Identity
 import Data.Text (Text)
 import Data.String (fromString)
 
-import Simpl.Annotation hiding (AnnExprF, AnnExpr)
+import Simpl.Annotation
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
@@ -29,27 +32,28 @@ import Simpl.Type (Type)
 
 -- * Public API
 
-astToJoinIR :: SymbolTable (A.AnnExpr Type) -> SymbolTable (J.AnnExpr '[ 'ExprType])
+astToJoinIR :: HasType flds => SymbolTable (A.AnnExpr flds) -> SymbolTable (J.AnnExpr '[ 'ExprType])
 astToJoinIR = runTransform transformTable
 
 -- * Transformation Monad
 
-newtype TransformT m a =
-  TransformT { unTransform :: ReaderT (SymbolTable (A.AnnExpr Type)) (SupplyT Int m) a }
+newtype TransformT fields m a =
+  TransformT { unTransform :: ReaderT (SymbolTable (A.AnnExpr fields)) (SupplyT Int m) a }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadReader (SymbolTable (A.AnnExpr Type))
            , MonadFreshVar)
 
-type Transform = TransformT Identity
+deriving instance Monad m => MonadReader (SymbolTable (A.AnnExpr flds)) (TransformT flds m)
+
+type Transform fields = TransformT fields Identity
 
 type MonadFreshVar = MonadSupply Int
 
 varSupply :: [Int]
 varSupply = [0..]
 
-runTransformT :: Monad m => TransformT m a -> SymbolTable (A.AnnExpr Type) -> m a
+runTransformT :: Monad m => TransformT flds m a -> SymbolTable (A.AnnExpr flds) -> m a
 runTransformT m table
   = fmap fst
   . flip runSupplyT varSupply
@@ -57,13 +61,13 @@ runTransformT m table
   . unTransform
   $ m
 
-runTransform :: Transform a -> SymbolTable (A.AnnExpr Type) -> a
+runTransform :: Transform flds a -> SymbolTable (A.AnnExpr flds) -> a
 runTransform m table = runIdentity (runTransformT m table)
 
 -- | Generates a fresh name using the given prefix and lookup function
-freshName :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
+freshName :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
          => Text -- ^ Prefix
-         -> (Text -> SymbolTable (A.AnnExpr Type) -> Maybe a) -- ^ Lookup function
+         -> (Text -> SymbolTable (A.AnnExpr flds) -> Maybe a) -- ^ Lookup function
          -> m Text
 freshName prefix lookupFun = do
   next <- (prefix <>) . fromString . show <$> supply
@@ -71,7 +75,7 @@ freshName prefix lookupFun = do
     Nothing -> pure next
     Just _  -> freshName prefix lookupFun
 
-freshVar, freshLabel :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m) => m Text
+freshVar, freshLabel :: HasType flds => (MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m) => m Text
 -- | Generate a fresh variable name
 freshVar = freshName "var" symTabLookupVar
 -- | Generate a fresh join label
@@ -84,28 +88,28 @@ makeJexpr :: Type
           -> J.AnnExpr '[ 'ExprType]
 makeJexpr ty = Fix . addField (withType ty) . toAnnExprF
 
-astType :: A.AnnExpr Type -> Type
-astType = A.annGetAnn . unfix
+astType :: HasType flds => A.AnnExpr flds -> Type
+astType = getType . unfix
 
 -- * ANF Transformation
 
 -- | Perform ANF transformation on the given symbol table
-transformTable :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
+transformTable :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
                => m (SymbolTable (J.AnnExpr '[ 'ExprType]))
 transformTable = do
   table <- ask
   symTabTraverseExprs (\(args, ty, expr) -> (args, ty, transformExpr expr)) table
 
 -- | Perform ANF transformation on the given expression
-transformExpr :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-              => A.AnnExpr Type
+transformExpr :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
+              => A.AnnExpr flds
               -> m (J.AnnExpr '[ 'ExprType])
 transformExpr expr = anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
 
 -- | Perform ANF transformation on the branch, afterwards handling control flow.
-transformBranch :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
+transformBranch :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
                 => J.ControlFlow (J.AnnExpr '[ 'ExprType]) -- ^ Control flow handler
-                -> A.Branch (A.AnnExpr Type) -- ^ Branches
+                -> A.Branch (A.AnnExpr flds) -- ^ Branches
                 -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
 transformBranch cf (A.BrAdt adtName argNames expr) = do
   jexpr <- anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
@@ -115,16 +119,16 @@ transformBranch cf (A.BrAdt adtName argNames expr) = do
 -- | Main ANF transformation logic. Given the SimPL AST, this function will
 -- normalize the AST, and then it will feed the final JValue into the given
 -- continuation to produce the resulting JoinIR AST.
-anfTransform :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-             => A.AnnExpr Type -- ^ Expression to translate
+anfTransform :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
+             => A.AnnExpr flds -- ^ Expression to translate
              -> (J.JValue -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
              -> m (J.AnnExpr '[ 'ExprType])
-anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
+anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.Lit lit -> cont (J.JLit lit)
   A.Var name -> cont (J.JVar name)
   A.Let name bindExpr next ->
     anfTransform bindExpr $ \bindVal ->
-      makeJexpr (A.annGetAnn (unfix bindExpr)) . J.JLet name bindVal <$>
+      makeJexpr (getType (unfix bindExpr)) . J.JLet name bindVal <$>
         local (symTabInsertVar name ty) (anfTransform next cont)
   A.BinOp op left right ->
     anfTransform left $ \jleft ->
@@ -139,7 +143,7 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
       falseBr' <- anfTransform falseBr (pure . makeJexpr (astType falseBr) . J.JVal)
       name <- freshVar
       let jmp = J.JJump lbl
-      let guardTy = A.annGetAnn (unfix guard)
+      let guardTy = getType (unfix guard)
       let guardCfe = makeJexpr guardTy (J.JVal jguard)
       let cfe = J.Cfe guardCfe (J.JIf (J.Cfe trueBr' jmp) (J.Cfe falseBr' jmp))
       -- TODO: Make JJoin node placement more efficient
@@ -148,7 +152,7 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
   A.Case branches expr ->
     anfTransform expr $ \jexpr -> do
       lbl <- freshLabel
-      let jexprTy = A.annGetAnn (unfix expr)
+      let jexprTy = getType (unfix expr)
       jbranches <- traverse (transformBranch (J.JJump lbl)) branches
       let jexprCfe = J.Cfe (makeJexpr jexprTy (J.JVal jexpr)) (J.JCase jbranches)
       name <- freshVar
@@ -182,8 +186,8 @@ anfTransform (Fix (A.AnnExprF ty exprf)) cont = case exprf of
 
 -- | Normalize each expression in sequential order, and then run the
 -- continuation with the expression values.
-collectArgs :: (MonadReader (SymbolTable (A.AnnExpr Type)) m, MonadFreshVar m)
-            => [A.AnnExpr Type] -- ^ Argument expressions
+collectArgs :: (HasType flds, MonadReader (SymbolTable (A.AnnExpr flds)) m, MonadFreshVar m)
+            => [A.AnnExpr flds] -- ^ Argument expressions
             -> ([J.JValue] -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
             -> m (J.AnnExpr '[ 'ExprType])
 collectArgs = go []
