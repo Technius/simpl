@@ -45,9 +45,10 @@ import qualified LLVM.IRBuilder.Instruction as LLVMIR
 import qualified LLVM.IRBuilder.Constant as LLVMIR
 
 import Simpl.Annotation hiding (AnnExpr, AnnExprF)
-import Simpl.Ast (BinaryOp(..), Type, TypeF(..), Constructor(..), Literal(..), Numeric(..))
+import Simpl.Ast (BinaryOp(..), Constructor(..), Literal(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
+import Simpl.Type (Type, TypeF(..), Numeric(..))
 import Simpl.Typecheck (literalType)
 import Simpl.Backend.Runtime ()
 import Simpl.JoinIR.Syntax

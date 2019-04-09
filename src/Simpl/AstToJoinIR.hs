@@ -22,10 +22,10 @@ import Data.Text (Text)
 import Data.String (fromString)
 
 import Simpl.Annotation hiding (AnnExprF, AnnExpr)
-import Simpl.Ast (Type)
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
+import Simpl.Type (Type)
 
 -- * Public API
 

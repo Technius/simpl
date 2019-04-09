@@ -13,8 +13,9 @@ import qualified Data.Text as Text
 import qualified Text.Megaparsec.Char as C
 import qualified Text.Megaparsec.Char.Lexer as L
 
-import Simpl.Ast (Expr, Decl, SourceFile, Type, Branch)
+import Simpl.Ast (Expr, Decl, SourceFile, Branch)
 import qualified Simpl.Ast as Ast
+import Simpl.Type (Type, Numeric(..), TypeF(..))
 
 type Parser m a = ParsecT Void Text m a
 
@@ -150,19 +151,19 @@ printExpr = lexeme (symbol "println" >> Ast.printExpr <$> parens expr)
 expr :: Parser m Expr
 expr = letExpr <|> caseExpr <|> ifExpr <|> castExpr <|> printExpr <|> try adtCons <|> arith
 
-numeric :: Parser m Ast.Numeric
-numeric = (symbol "Double" >> pure Ast.NumDouble) <|> (symbol "Int" >> pure Ast.NumInt)
+numeric :: Parser m Numeric
+numeric = (symbol "Double" >> pure NumDouble) <|> (symbol "Int" >> pure NumInt)
 
 typeLit :: Parser m Type
-typeLit = Fix <$> ((Ast.TyNumber <$> numeric)
-                   <|> (symbol "Bool" >> pure Ast.TyBool)
-                   <|> (symbol "String" >> pure Ast.TyString))
+typeLit = Fix <$> ((TyNumber <$> numeric)
+                   <|> (symbol "Bool" >> pure TyBool)
+                   <|> (symbol "String" >> pure TyString))
 
 typeIdentifier :: Parser m Text
 typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumChar))
 
 typeAdt :: Parser m Type
-typeAdt = Fix . Ast.TyAdt <$> typeIdentifier
+typeAdt = Fix . TyAdt <$> typeIdentifier
 
 typeAtom :: Parser m Type
 typeAtom = typeLit <|> typeAdt
@@ -172,7 +173,7 @@ typeFun = lexeme $ do
   first <- (parens type' <|> typeAtom)
   _ <- symbol "->"
   rest <- (parens type' <|> typeAtom) `sepBy1` symbol "->"
-  pure . Fix $ Ast.TyFun (first : init rest) (last rest)
+  pure . Fix $ TyFun (first : init rest) (last rest)
 
 type' :: Parser m Type
 type' = try typeFun <|> typeAtom

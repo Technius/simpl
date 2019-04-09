@@ -26,7 +26,7 @@ import qualified Data.Vinyl.TypeLevel as V
 import Data.Singletons.TH (genSingletons)
 import Text.Show.Deriving (deriveShow1)
 
-import Simpl.Ast (Type)
+import Simpl.Type (Type)
 
 -- * Annotated expressions
 --

@@ -19,6 +19,7 @@ import qualified Data.Map as Map
 
 import Simpl.Ast
 import Simpl.SymbolTable
+import Simpl.Type
 
 type UVar = IntVar
 type UType = UTerm TypeF UVar

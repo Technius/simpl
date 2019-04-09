@@ -22,7 +22,8 @@ import Data.Text (Text)
 import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))
 import qualified Data.Text.Prettyprint.Doc as PP
 import qualified Simpl.Annotation as Ann
-import Simpl.Ast (BinaryOp(..), Numeric(..), Literal(..))
+import Simpl.Ast (BinaryOp(..), Literal(..))
+import Simpl.Type (Numeric(..))
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
 
