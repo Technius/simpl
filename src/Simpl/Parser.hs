@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGuAGE OverloadedStrings #-}
 module Simpl.Parser where
 
@@ -13,11 +14,14 @@ import qualified Data.Text as Text
 import qualified Text.Megaparsec.Char as C
 import qualified Text.Megaparsec.Char.Lexer as L
 
-import Simpl.Ast (Expr, Decl, SourceFile, Branch)
+import Simpl.Annotation (Fields(ExprPos), withPos, toAnnExprF, addField, unannotate)
+import Simpl.Ast (Decl, SourceFile, Branch)
 import qualified Simpl.Ast as Ast
 import Simpl.Type (Type, Numeric(..), TypeF(..))
 
 type Parser m a = ParsecT Void Text m a
+
+type SourcedExpr = Ast.AnnExpr '[ 'ExprPos ]
 
 whitespace :: Parser m ()
 whitespace = L.space C.space1 (L.skipLineComment "#") empty
@@ -33,6 +37,15 @@ parens = between (C.char '(') (C.char ')')
 
 signed :: Num a => Parser m a -> Parser m a
 signed = L.signed whitespace
+
+withSourcePos :: (SourcePos -> Parser m a) -> Parser m a
+withSourcePos f = getPosition >>= f
+
+tagSourcePos :: Parser m (Ast.ExprF SourcedExpr)
+             -> Parser m SourcedExpr
+tagSourcePos m = withSourcePos $ \pos -> do
+  m' <- m
+  pure . Fix . addField (withPos pos) . toAnnExprF $ m'
 
 reservedKeywords :: [Text]
 reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as", "println"]
@@ -52,103 +65,106 @@ identifier = lexeme go >>= check
     go = Text.cons <$> (C.lowerChar <|> C.char '_')
       <*> (Text.pack <$> many (C.alphaNumChar <|> C.char '_'))
 
-literal :: Parser m Expr
+literal :: Parser m SourcedExpr
 literal = lexeme (bool <|> number <|> str)
   where
-    bool = Ast.litBool <$> ((symbol "true" >> pure True) <|> (symbol "false" >> pure False))
+    lit = tagSourcePos . fmap Ast.Lit
+    bool = lit $ Ast.LitBool <$> ((symbol "true" >> pure True) <|> (symbol "false" >> pure False))
     number = try double <|> integer
-    double = Ast.litDouble <$> signed L.float
-    integer = Ast.litInt <$> signed L.decimal
+    double = lit $ Ast.LitDouble <$> signed L.float
+    integer = lit $ Ast.LitInt <$> signed L.decimal
     quoteChar :: Parser m Char    -- avoid type variable ambiguity
     quoteChar = C.char '"'
-    str = Ast.litString . Text.pack <$> (quoteChar >> manyTill L.charLiteral quoteChar)
+    str = lit $ Ast.LitString . Text.pack <$> (quoteChar >> manyTill L.charLiteral quoteChar)
 
-var :: Parser m Expr
-var = Ast.var <$> identifier
+var :: Parser m SourcedExpr
+var = tagSourcePos (Ast.Var <$> identifier)
 
-funRef :: Parser m Expr
-funRef = lexeme (Ast.funRef <$> (C.char '&' >> identifier))
+funRef :: Parser m SourcedExpr
+funRef = lexeme (tagSourcePos (Ast.FunRef <$> (C.char '&' >> identifier)))
 
-appExpr :: Parser m Expr
-appExpr = lexeme $ do
+appExpr :: Parser m SourcedExpr
+appExpr = lexeme . tagSourcePos $ do
   fname <- C.string "@" >> identifier
   args <- option [] (parens (expr `sepBy` symbol ","))
-  pure $ Ast.appExpr fname args
+  pure $ Ast.App fname args
 
 -- | Non-recursive component of expression gramamr
-atom :: Parser m Expr
+atom :: Parser m SourcedExpr
 atom = appExpr <|> funRef <|> literal <|> var
 
 -- | Arithmetic expression parser
-arith :: Parser m Expr
+arith :: Parser m SourcedExpr
 arith = makeExprParser (lexeme (parens expr) <|> atom) arithTable
   where
     arithTable =
-      [ [ binary "*" Ast.mul
-        , binary "/" Ast.div ]
-      , [ binary "+" Ast.add
-        , binary "-" Ast.sub ]
-      , [ binary "<=" Ast.lte
-        , binary "<" Ast.lt
-        , binary "==" Ast.eq ] ]
-    binary name f = InfixL (f <$ symbol name)
+      [ [ binary "*"  Ast.Mul
+        , binary "/"  Ast.Div ]
+      , [ binary "+"  Ast.Add
+        , binary "-"  Ast.Sub ]
+      , [ binary "<=" Ast.Lte
+        , binary "<"  Ast.Lt
+        , binary "==" Ast.Equal ] ]
+    binary name op = InfixL $ withSourcePos $ \pos -> do
+      _ <- symbol name
+      pure $ \a b -> Fix . addField (withPos pos) $ toAnnExprF (Ast.BinOp op a b)
 
-ifExpr :: Parser m Expr
-ifExpr = lexeme $ do
+ifExpr :: Parser m SourcedExpr
+ifExpr = tagSourcePos . lexeme $ do
   _ <- keyword "if"
   cond <- expr
   _ <- keyword "then"
   t1 <- expr
   _ <- keyword "else"
   t2 <- expr
-  pure $ Ast.ifExpr cond t1 t2
+  pure $ Ast.If cond t1 t2
 
 -- | ADT constructor
-adtCons :: Parser m Expr
-adtCons = lexeme $ do
+adtCons :: Parser m SourcedExpr
+adtCons = tagSourcePos . lexeme $ do
   name <- typeIdentifier
   args <- many (lexeme (parens expr) <|> try atom)
-  pure $ Ast.cons name args
+  pure $ Ast.Cons name args
 
 -- | Case analysis branch
-branch :: Parser m (Branch Expr)
+branch :: Parser m (Branch SourcedExpr)
 branch = lexeme $ do
   name <- typeIdentifier
   args <- many identifier
   _ <- symbol "=>"
   body <- expr
-  pure $ Ast.branchAdt name args body
+  pure $ Ast.BrAdt name args body
 
 -- | Case analysis expression
-caseExpr :: Parser m Expr
-caseExpr = lexeme $ do
+caseExpr :: Parser m SourcedExpr
+caseExpr = tagSourcePos . lexeme $ do
   _ <- symbol "case"
   val <- expr
   _ <- symbol "of"
   branches <- some branch
-  pure $ Ast.caseExpr branches val
+  pure $ Ast.Case branches val
 
-letExpr :: Parser m Expr
-letExpr = lexeme $ do
+letExpr :: Parser m SourcedExpr
+letExpr = tagSourcePos . lexeme $ do
   _ <- symbol "let"
   name <- identifier
   _ <- symbol "="
   val <- expr
   _ <- symbol "in"
-  Ast.letExpr name val <$> expr
+  Ast.Let name val <$> expr
 
-castExpr :: Parser m Expr
-castExpr = lexeme $ do
+castExpr :: Parser m SourcedExpr
+castExpr = tagSourcePos . lexeme $ do
   _ <- symbol "cast"
   e <- expr
   _ <- symbol "as"
   n <- numeric
-  pure $ Ast.castExpr e n
+  pure $ Ast.Cast e n
 
-printExpr :: Parser m Expr
-printExpr = lexeme (symbol "println" >> Ast.printExpr <$> parens expr)
+printExpr :: Parser m SourcedExpr
+printExpr = tagSourcePos . lexeme $ (symbol "println" >> Ast.Print <$> parens expr)
 
-expr :: Parser m Expr
+expr :: Parser m SourcedExpr
 expr = letExpr <|> caseExpr <|> ifExpr <|> castExpr <|> printExpr <|> try adtCons <|> arith
 
 numeric :: Parser m Numeric
@@ -184,7 +200,7 @@ declFunParamList = lexeme $ option [] (parens params)
     oneParam = liftA2 (,) (identifier <* symbol ":") type'
     params = oneParam `sepBy1` symbol ","
 
-declFun :: Parser m (Decl Expr)
+declFun :: Parser m (Decl SourcedExpr)
 declFun = lexeme $ do
   _ <- keyword "fun"
   name <- identifier
@@ -201,7 +217,7 @@ constructor = lexeme $ do
   args <- many type'
   pure $ Ast.Ctor name args
 
-declAdt :: Parser m (Decl Expr)
+declAdt :: Parser m (Decl SourcedExpr)
 declAdt = do
   _ <- keyword "data"
   name <- typeIdentifier
@@ -209,16 +225,16 @@ declAdt = do
   ctors <- constructor `sepBy1` symbol "|"
   pure $ Ast.DeclAdt name ctors
 
-decl :: Parser m (Decl Expr)
+decl :: Parser m (Decl SourcedExpr)
 decl = declFun <|> declAdt
 
-sourceFile :: Text -> Parser m (SourceFile Expr)
+sourceFile :: Text -> Parser m (SourceFile SourcedExpr)
 sourceFile name = (Ast.SourceFile name <$> many decl) <* eof
 
-runExprParser :: Text -> Either String Expr
+runExprParser :: Text -> Either String SourcedExpr
 runExprParser input = case runParser (expr <* eof) "" input of
   Left err -> Left (parseErrorPretty' input err)
   Right e -> Right e
 
 testRunExprParser :: String -> Either String String
-testRunExprParser = fmap (show . pretty) . runExprParser . Text.pack
+testRunExprParser = fmap (show . pretty . unannotate) . runExprParser . Text.pack

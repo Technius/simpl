@@ -27,6 +27,7 @@ import qualified Data.Vinyl as V
 import qualified Data.Vinyl.TypeLevel as V
 import Data.Singletons.TH (genSingletons)
 import Text.Show.Deriving (deriveShow1)
+import Text.Megaparsec.Pos (SourcePos)
 
 import Simpl.Type (Type, UType)
 
@@ -38,7 +39,10 @@ import Simpl.Type (Type, UType)
 -- more fields.
 
 -- | Possible annotations
-data Fields = ExprType | TCType deriving (Show)
+data Fields = ExprType -- ^ Type information
+            | TCType -- ^ Typechecker information
+            | ExprPos -- ^ Position of expression in source file
+            deriving (Show)
 
 genSingletons [ ''Fields ]
 
@@ -46,6 +50,7 @@ genSingletons [ ''Fields ]
 type family ElF (f :: Fields) :: * where
   ElF 'ExprType = Type
   ElF 'TCType = UType
+  ElF 'ExprPos = SourcePos
 
 -- | Wrapper for annotation fields
 newtype Attr f = Attr { _unAttr :: ElF f }
@@ -97,6 +102,12 @@ type HasUType fields = V.RElem 'TCType fields (V.RIndex 'TCType fields)
 getUType :: HasUType fields => AnnExprF expr fields a -> UType
 getUType = _unAttr . V.rget @'TCType . annGetAnn
 
+type HasPos fields = V.RElem 'ExprPos fields (V.RIndex 'ExprPos fields)
+
+-- | Retrieves the unification variable information stored in a typechecking [AnnExprF]
+getPos :: HasPos fields => AnnExprF expr fields a -> SourcePos
+getPos = _unAttr . V.rget @'ExprPos . annGetAnn
+
 -- | Creates a type field whose value is the given type
 withType :: Type -> Attr 'ExprType
 withType ty = SExprType =:: ty
@@ -104,6 +115,11 @@ withType ty = SExprType =:: ty
 -- | Creates a type field whose value is the given type
 withUType :: UType -> Attr 'TCType
 withUType ty = STCType =:: ty
+
+
+-- | Retrieves the unification variable information stored in a typechecking [AnnExprF]
+withPos :: SourcePos -> Attr 'ExprPos
+withPos pos = SExprPos =:: pos
 
 -- * Misc
 

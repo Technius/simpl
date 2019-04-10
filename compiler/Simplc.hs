@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
@@ -60,7 +61,7 @@ appLogic = do
   ast <- readSourceFile (Cli.fileName options)
   codegen ast
 
-codegen :: SourceFile Expr -> CliM ()
+codegen :: SourceFile SourcedExpr -> CliM ()
 codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
     Just _ -> do
@@ -84,7 +85,7 @@ codegen srcFile@(SourceFile _ decls) =
       DeclFun n _ _ _ -> n == "main"
       _ -> False
 
-readSourceFile :: String -> CliM (SourceFile Expr)
+readSourceFile :: String -> CliM (SourceFile SourcedExpr)
 readSourceFile filepath = do
   sourceContents <- liftIO $ TextIO.readFile filepath
   let res = runParser (Parser.sourceFile (Text.pack filepath)) filepath sourceContents

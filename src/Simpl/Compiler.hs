@@ -11,7 +11,7 @@ import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
 import LLVM.Context
 
-import Simpl.Annotation (unannotate, toAnnExpr, Fields(..))
+import Simpl.Annotation (unannotate, Fields(..))
 import Simpl.Ast
 import Simpl.AstToJoinIR
 import Simpl.Backend.Codegen (runCodegen)
@@ -50,7 +50,9 @@ buildRuntime ctx cont = do
   LLVMM.withModuleFromLLVMAssembly ctx (LLVMM.File runtimeSourcePath) cont
 
 -- | Compiles a SimPL source file
-fullCompilerPipeline :: CompilerOpts -> SourceFile Expr -> IO (Either CompilerErr LLVM.Module)
+fullCompilerPipeline :: CompilerOpts
+                     -> SourceFile (AnnExpr '[ 'ExprPos ])
+                     -> IO (Either CompilerErr LLVM.Module)
 fullCompilerPipeline options srcFile@(SourceFile _name decls) =
   runCompiler (buildSymbolTable srcFile) $ do
     symTable <- get
@@ -62,10 +64,10 @@ fullCompilerPipeline options srcFile@(SourceFile _name decls) =
     -- liftIO $ forM_ (symTabFuns jSymTable) $ \(args, ty, expr) -> do
     --   print (pretty args <> pretty " :: " <> pretty ty)
     --   print (pretty (unannotate expr))
-    let srcCode = unlines [show (pretty d) | d <- decls]
+    let srcCode = unlines [show (pretty (unannotate <$> d)) | d <- decls]
     pure $ runCodegen options srcCode jSymTable
   where
-    tycheckFuns :: ([(Text, Type)], Type, Expr)
-                -> ([(Text, Type)], Type, Typecheck (AnnExpr ['ExprType, 'TCType]))
+    tycheckFuns :: ([(Text, Type)], Type, SourcedExpr)
+                -> ([(Text, Type)], Type, Typecheck '[ 'ExprPos] (AnnExpr '[ 'ExprType, 'TCType, 'ExprPos]))
     tycheckFuns (params, ty, expr) =
-      (params, ty, withExtraVars params (checkType ty (toAnnExpr expr)))
+      (params, ty, withExtraVars params (checkType ty expr))

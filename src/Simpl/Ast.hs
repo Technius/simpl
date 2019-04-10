@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -219,3 +220,9 @@ instance Pretty e => Pretty (Decl e) where
 
 data SourceFile e = SourceFile Text [Decl e]
   deriving (Show, Functor)
+
+-- * Misc.
+
+-- | An [AnnExpr] annotated with source position. This alias is defined because
+-- of how often it occurs.
+type SourcedExpr = AnnExpr '[ 'Ann.ExprPos]

@@ -40,25 +40,25 @@ instance Fallible TypeF UVar TypeError where
   occursFailure = TyErrOccurs
   mismatchFailure = TyErrMismatch
 
-newtype Typecheck a = Typecheck
+newtype Typecheck fields a = Typecheck
   { unTypecheck ::
-      ReaderT (SymbolTable Expr) (
+      ReaderT (SymbolTable (AnnExpr fields)) (
         ExceptT TypeError (
           IntBindingT TypeF Identity)) a
   } deriving ( Functor
              , Applicative
              , Monad
-             , MonadReader (SymbolTable Expr)
+             , MonadReader (SymbolTable (AnnExpr fields))
              , MonadError TypeError)
 
 -- | Unify expected with actual type
-unifyTy :: UType -> UType -> Typecheck UType
+unifyTy :: UType -> UType -> Typecheck fields UType
 unifyTy t1 t2 = Typecheck . lift $ unify t1 t2
 
-mkMetaVar :: Typecheck UType
+mkMetaVar :: Typecheck fields UType
 mkMetaVar = Typecheck . lift . lift $ UVar <$> freeVar
 
-forceBindings :: UType -> Typecheck UType
+forceBindings :: UType -> Typecheck fields UType
 forceBindings v = Typecheck . lift $ applyBindings v
 
 literalType :: Literal -> TypeF a
@@ -69,11 +69,12 @@ literalType = \case
   LitString _ -> TyString
 
 -- | Annotate every AST node with a unification meta variable
-attachExprMetaVar :: AnnExpr fields -> Typecheck (AnnExpr ('TCType ': fields))
+attachExprMetaVar :: AnnExpr fields -> Typecheck fields (AnnExpr ('TCType ': fields))
 attachExprMetaVar = cataM (\e -> Fix . flip addField e . withUType <$> mkMetaVar)
 
 -- | Resolve all unification variables, returning a well-typed AST
-tcExprToTypedExpr :: HasUType fields => AnnExpr fields -> Typecheck (AnnExpr ('ExprType ': fields))
+tcExprToTypedExpr :: AnnExpr ('TCType ': fields)
+                  -> Typecheck fields (AnnExpr ('ExprType ': 'TCType ': fields))
 tcExprToTypedExpr =
   cataM $ \ae ->
     let uty = getUType ae in
@@ -81,7 +82,7 @@ tcExprToTypedExpr =
       Just ty -> pure . Fix $ addField (withType ty) ae
       Nothing -> throwError $ TyErrAmbiguousType uty
 
-inferType :: AnnExpr fields -> Typecheck (AnnExpr ('TCType ': fields))
+inferType :: AnnExpr fields -> Typecheck fields (AnnExpr ('TCType ': fields))
 inferType = cata $ \ae -> case annGetExpr ae of
   Lit l -> pure $ annotate (Lit l) (annGetAnn ae) (UTerm (literalType l))
   BinOp op x y ->
@@ -192,9 +193,9 @@ inferType = cata $ \ae -> case annGetExpr ae of
                    -> UType -- ^ Result type
                    -> AnnRec fields -- ^ Annotation fields
                    -> Bool -- ^ Whether result type should be unified with arguments
-                   -> Typecheck (AnnExpr ('TCType ': fields))
-                   -> Typecheck (AnnExpr ('TCType ': fields))
-                   -> Typecheck (AnnExpr ('TCType ': fields))
+                   -> Typecheck fields (AnnExpr ('TCType ': fields))
+                   -> Typecheck fields (AnnExpr ('TCType ': fields))
+                   -> Typecheck fields (AnnExpr ('TCType ': fields))
     typecheckBinop op resultTy annFields unifyArgResult xm ym = do
       (x, y) <- liftA2 (,) xm ym
       xTy <- unifyTy (extractTy x) (UTerm (TyNumber NumUnknown))
@@ -202,7 +203,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
       pure $ annotate (BinOp op x y) annFields rTy
 
-    lookupFun :: Text -> [UType] -> Typecheck ([Type], Type)
+    lookupFun :: Text -> [UType] -> Typecheck fields ([Type], Type)
     lookupFun name argTys =
       asks (symTabLookupVar name) >>= \case
         Just ty ->
@@ -218,16 +219,16 @@ inferType = cata $ \ae -> case annGetExpr ae of
             Just (params, resTy, _) -> pure (snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 
-checkType :: Type -> AnnExpr fields -> Typecheck (AnnExpr ('ExprType ': 'TCType ': fields))
+checkType :: Type -> AnnExpr fields -> Typecheck fields (AnnExpr ('ExprType ': 'TCType ': fields))
 checkType ty expr = do
   typedExpr <- inferType expr
   _ <- unifyTy (getUType . unfix $ typedExpr) (typeToUtype ty)
   tcExprToTypedExpr typedExpr
 
-withExtraVars :: [(Text, Type)] -> Typecheck (AnnExpr fields) -> Typecheck (AnnExpr fields)
+withExtraVars :: [(Text, Type)] -> Typecheck flds1 (AnnExpr flds2) -> Typecheck flds1 (AnnExpr flds2)
 withExtraVars vars = local (symTabInsertVars vars)
 
-runTypecheck :: SymbolTable Expr -> Typecheck a -> Either TypeError a
+runTypecheck :: SymbolTable (AnnExpr fields) -> Typecheck fields a -> Either TypeError a
 runTypecheck ctx
   = runIdentity
   . evalIntBindingT
