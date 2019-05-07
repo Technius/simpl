@@ -14,7 +14,7 @@ import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
-import Data.Foldable (traverse_)
+import Data.Foldable (traverse_, asum)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
@@ -215,8 +215,10 @@ inferType = cata $ \ae -> case annGetExpr ae of
                   expected = TyFun argTys resTy
               throwError $ TyErrMismatch expected got
         Nothing ->
-          asks (symTabLookupStaticFun name) >>= \case
-            Just (params, resTy, _) -> pure (snd <$> params, resTy)
+          let lookupStatic n = fmap (\(p, r, _) -> (p, r)) . symTabLookupStaticFun n
+              result = traverse (\f -> asks (f name)) [lookupStatic, symTabLookupExternFun] in
+          asum <$> result >>= \case
+            Just (params, resTy) -> pure (snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 
 checkType :: Type -> AnnExpr fields -> Typecheck fields (AnnExpr ('ExprType ': 'TCType ': fields))

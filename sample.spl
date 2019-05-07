@@ -31,7 +31,8 @@ fun main : Int := {
   case JustI 10.0 of
     JustI x =>
       let msg = println("In Just branch") in
-      (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf
+      let mynum = @abs(-1) in
+      (if (@even(4)) then @double_me(5) else @factorial(6)) * @asdf * mynum
     Nothing =>
       let msg = println("In Nothing branch") in
       let res = 4 in
@@ -73,3 +74,5 @@ fun cast_test_1 : Int := {
 fun cast_test_2 : Int := {
   (1 * 1) + (cast 2.0 as Int)
 }
+
+fun abs (x : Int) : Int := extern

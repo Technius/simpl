@@ -48,7 +48,7 @@ tagSourcePos m = withSourcePos $ \pos -> do
   pure . Fix . addField (withPos pos) . toAnnExprF $ m'
 
 reservedKeywords :: [Text]
-reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as", "println"]
+reservedKeywords = ["fun", "data", "if", "then", "else", "true", "false", "case", "of", "let", "in", "cast", "as", "println", "extern"]
 
 keyword :: Text -> Parser m Text
 keyword k = lexeme (C.string k <* notFollowedBy C.alphaNumChar)
@@ -200,16 +200,24 @@ declFunParamList = lexeme $ option [] (parens params)
     oneParam = liftA2 (,) (identifier <* symbol ":") type'
     params = oneParam `sepBy1` symbol ","
 
-declFun :: Parser m (Decl SourcedExpr)
-declFun = lexeme $ do
+declFunDecl :: Parser m (Text, [(Text, Type)], Type)
+declFunDecl = do
   _ <- keyword "fun"
   name <- identifier
   params <- declFunParamList
   _ <- symbol ":"
   ty <- type'
   _ <- symbol ":="
-  body <- between (symbol "{") (symbol "}") expr
-  pure $ Ast.DeclFun name params ty body
+  pure (name, params, ty)
+
+declFun :: Parser m (Decl SourcedExpr)
+declFun = lexeme $
+  declFunDecl >>= (\x -> choice [f x | f <- [declFunStatic, declFunExtern]])
+  where
+    declFunStatic (name, params, ty) = do
+      body <- between (symbol "{") (symbol "}") expr
+      pure $ Ast.DeclFun name params ty body
+    declFunExtern (n, p, t) = keyword "extern" >> (pure $ Ast.DeclExtern n p t)
 
 constructor :: Parser m Ast.Constructor
 constructor = lexeme $ do

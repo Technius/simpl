@@ -207,16 +207,21 @@ data Decl e
   = DeclFun Text [(Text, Type)] Type e -- ^ A function declaration, in order of
                                        -- name, type, params, expression
   | DeclAdt Text [Constructor] -- ^ An algebraic data type declaration
+  | DeclExtern Text [(Text, Type)] Type -- ^ A declaration to an external function (C ABI)
   deriving (Show, Functor)
 
 instance Pretty e => Pretty (Decl e) where
   pretty = \case
     DeclFun name params ty expr ->
-      let params' = (\case (n, t) -> hsep [pretty n, ":", pretty t]) <$> params
-          paramList = if null params then [] else [encloseSep "(" ")" ", " params']
-      in hsep (["fun", pretty name] ++ paramList ++ [":", pretty ty, "="]) <> softline <> pretty expr
+      funDecl name params ty <+> "{" <> softline <> pretty expr <> softline <> "}"
     DeclAdt name ctors ->
       hsep ["data", pretty name] <+> encloseSep "= " emptyDoc " | " (pretty <$> ctors)
+    DeclExtern name params ty -> funDecl name params ty <+> "extern"
+    where
+      funDecl name params ty =
+        let params' = (\case (n, t) -> hsep [pretty n, ":", pretty t]) <$> params
+            paramList = if null params then [] else [encloseSep "(" ")" ", " params']
+        in hsep (["fun", pretty name] ++ paramList ++ [":", pretty ty, "="])
 
 data SourceFile e = SourceFile Text [Decl e]
   deriving (Show, Functor)

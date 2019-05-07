@@ -492,6 +492,13 @@ funToLLVM name params ty body =
              LLVMIR.ret retval
            pure foper
 
+emitExtern :: Text -> [(Text, Type)] -> Type -> LLVMIR.ModuleBuilderT Codegen LLVM.Operand
+emitExtern name params ty =
+    do let fparams = [typeToLLVM t | (_, t) <- params]
+       foper <- LLVMIR.extern (llvmName name) fparams (typeToLLVM ty)
+       modify (\t -> t { tableFuns = Map.insert name foper (tableFuns t) })
+       pure foper
+
 -- | Generate code for the entire module
 moduleCodegen :: HasType fields
               => String
@@ -506,6 +513,9 @@ moduleCodegen srcCode symTab = mdo
   modify (\t -> t { tablePrintf = RT.printfRef })
   forM_ (Map.toList . symTabAdts $ symTab) $ \(name, (_, ctors)) ->
     adtToLLVM name ctors
+  externOpers <- forM (Map.toList . symTabExtern $ symTab) $ \(name, (params, ty)) ->
+    (name, ) <$> emitExtern name params ty
+  modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList externOpers })
   -- Insert function operands into symbol table before emitting so order of
   -- definition doesn't matter. This works because the codegen monad is lazy.
   modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })

@@ -18,6 +18,7 @@ data SymbolTable expr = MkSymbolTable
   { symTabAdts :: Map Text (Type, [Constructor])
   , symTabFuns :: Map Text ([(Text, Type)], Type, expr) -- ^ Static functions
   , symTabVars :: Map Text Type -- ^ Variables
+  , symTabExtern :: Map Text ([(Text, Type)], Type) -- ^ External functions
   }
   deriving (Show, Functor, Foldable, Traversable)
 
@@ -31,10 +32,15 @@ buildSymbolTable (SourceFile _ decls) =
         (\case
           DeclFun name params ty body -> Just (name, (params, ty, body))
           _ -> Nothing) decls
+      extern = Map.fromList $ mapMaybe
+        (\case
+          DeclExtern name params ty -> Just (name, (params, ty))
+          _ -> Nothing) decls
   in MkSymbolTable
      { symTabAdts = adts
      , symTabFuns = funs
-     , symTabVars = Map.empty }
+     , symTabVars = Map.empty
+     , symTabExtern = extern }
 
 symTabModifyAdts :: (Map Text (Type, [Constructor]) -> Map Text (Type, [Constructor]))
                  -> SymbolTable e
@@ -77,3 +83,6 @@ symTabInsertVars vars t = t { symTabVars = Map.union (Map.fromList vars) (symTab
 
 symTabLookupStaticFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type, e)
 symTabLookupStaticFun name = Map.lookup name . symTabFuns
+
+symTabLookupExternFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type)
+symTabLookupExternFun name = Map.lookup name . symTabExtern
