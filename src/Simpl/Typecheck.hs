@@ -164,7 +164,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
     -- Annotate with result type
     pure $ annotate (App name params') (annGetAnn ae) (typeToUtype ty)
   FunRef name ->
-    asks (symTabLookupFun name) >>= \case
+    asks (symTabLookupStaticFun name) >>= \case
       Just (params, ty, _) ->
         let paramTys = snd <$> params in
           pure $ annotate (FunRef name) (annGetAnn ae) (typeToUtype (Fix $ TyFun paramTys ty))
@@ -215,7 +215,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
                   expected = TyFun argTys resTy
               throwError $ TyErrMismatch expected got
         Nothing ->
-          asks (symTabLookupFun name) >>= \case
+          asks (symTabLookupStaticFun name) >>= \case
             Just (params, resTy, _) -> pure (snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 

@@ -16,8 +16,9 @@ import Simpl.Type
 
 data SymbolTable expr = MkSymbolTable
   { symTabAdts :: Map Text (Type, [Constructor])
-  , symTabFuns :: Map Text ([(Text, Type)], Type, expr)
-  , symTabVars :: Map Text Type }
+  , symTabFuns :: Map Text ([(Text, Type)], Type, expr) -- ^ Static functions
+  , symTabVars :: Map Text Type -- ^ Variables
+  }
   deriving (Show, Functor, Foldable, Traversable)
 
 buildSymbolTable :: SourceFile e -> SymbolTable e
@@ -74,5 +75,5 @@ symTabInsertVar name ty t = t { symTabVars = Map.insert name ty (symTabVars t) }
 symTabInsertVars :: [(Text, Type)] -> SymbolTable e -> SymbolTable e
 symTabInsertVars vars t = t { symTabVars = Map.union (Map.fromList vars) (symTabVars t) }
 
-symTabLookupFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type, e)
-symTabLookupFun name = Map.lookup name . symTabFuns
+symTabLookupStaticFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type, e)
+symTabLookupStaticFun name = Map.lookup name . symTabFuns
