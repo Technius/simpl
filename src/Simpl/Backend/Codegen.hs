@@ -520,7 +520,8 @@ moduleCodegen srcCode symTab = mdo
   -- Insert function operands into symbol table before emitting so order of
   -- definition doesn't matter. This works because the codegen monad is lazy.
   modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })
-  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (params, ty, body)) ->
+  -- TODO: Care about type variables
+  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (tvars, params, ty, body)) ->
     (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do

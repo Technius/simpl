@@ -10,13 +10,15 @@ import Data.List (find)
 import Data.Maybe (mapMaybe, listToMaybe)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Simpl.Ast
 import Simpl.Type
 
 data SymbolTable expr = MkSymbolTable
   { symTabAdts :: Map Text (Type, [Constructor])
-  , symTabFuns :: Map Text ([(Text, Type)], Type, expr) -- ^ Static functions
+  , symTabFuns :: Map Text (Set Text, [(Text, Type)], Type, expr) -- ^ Static functions: free type vars, params, return type, body
   , symTabVars :: Map Text Type -- ^ Variables
   , symTabExtern :: Map Text ([(Text, Type)], Type) -- ^ External functions
   }
@@ -31,7 +33,9 @@ buildSymbolTable (SourceFile _ decls) =
           _ -> Nothing) decls
       funs = Map.fromList $ mapMaybe
         (\case
-          DeclFun name params ty body -> Just (name, (params, ty, body))
+          DeclFun name params ty body ->
+            let tvars = Set.unions (getTypeVars ty : (getTypeVars . snd <$> params)) in
+              Just (name, (tvars, params, ty, body))
           _ -> Nothing) decls
       extern = Map.fromList $ mapMaybe
         (\case
@@ -48,18 +52,18 @@ symTabModifyAdts :: (Map Text (Type, [Constructor]) -> Map Text (Type, [Construc
                  -> SymbolTable e
 symTabModifyAdts f t = t { symTabAdts = f (symTabAdts t) }
 
-symTabMapExprs :: (([(Text, Type)], Type, e) -> ([(Text, Type)], Type, e')) -- ^ Map over functions
+symTabMapExprs :: ((Set Text, [(Text, Type)], Type, e) -> (Set Text, [(Text, Type)], Type, e')) -- ^ Map over functions
                -> SymbolTable e
                -> SymbolTable e'
 symTabMapExprs f t = t { symTabFuns = Map.map f (symTabFuns t) }
 
 symTabTraverseExprs
   :: Monad m
-  => (([(Text, Type)], Type, e) -> ([(Text, Type)], Type, m e')) -- ^ Map over functions
+  => ((Set Text, [(Text, Type)], Type, e) -> (Set Text, [(Text, Type)], Type, m e')) -- ^ Map over functions
   -> SymbolTable e
   -> m (SymbolTable e')
 symTabTraverseExprs f t = do
-  upd <- traverse ((\(args, ty, me) -> (args, ty,) <$> me) . f) (symTabFuns t)
+  upd <- traverse ((\(tvars, args, ty, me) -> (tvars, args, ty,) <$> me) . f) (symTabFuns t)
   pure $ t { symTabFuns = upd }
 
 -- | Searches for the given constructor, returning the name of the ADT, the
@@ -82,7 +86,7 @@ symTabInsertVar name ty t = t { symTabVars = Map.insert name ty (symTabVars t) }
 symTabInsertVars :: [(Text, Type)] -> SymbolTable e -> SymbolTable e
 symTabInsertVars vars t = t { symTabVars = Map.union (Map.fromList vars) (symTabVars t) }
 
-symTabLookupStaticFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type, e)
+symTabLookupStaticFun :: Text -> SymbolTable e -> Maybe (Set Text, [(Text, Type)], Type, e)
 symTabLookupStaticFun name = Map.lookup name . symTabFuns
 
 symTabLookupExternFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type)

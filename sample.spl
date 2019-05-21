@@ -2,7 +2,9 @@ data Foo = { Bar Double }
 
 data MaybeI = { JustI Double | Nothing }
 
-data Barbar a = { Asdf Int a }
+# data Barbar a = { Asdf Int a }
+
+# fun id (x : a) : a := { x }
 
 fun not (b : Bool) : Bool := { if b then false else true }
 

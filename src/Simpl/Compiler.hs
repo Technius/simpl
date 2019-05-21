@@ -4,6 +4,7 @@
 module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Set (Set)
 import Data.Text.Prettyprint.Doc (pretty)
 import Data.Text (Text)
 
@@ -67,7 +68,7 @@ fullCompilerPipeline options srcFile@(SourceFile _name decls) =
     let srcCode = unlines [show (pretty (unannotate <$> d)) | d <- decls]
     pure $ runCodegen options srcCode jSymTable
   where
-    tycheckFuns :: ([(Text, Type)], Type, SourcedExpr)
-                -> ([(Text, Type)], Type, Typecheck '[ 'ExprPos] (AnnExpr '[ 'ExprType, 'TCType, 'ExprPos]))
-    tycheckFuns (params, ty, expr) =
-      (params, ty, withExtraVars params (checkType ty expr))
+    tycheckFuns :: (Set Text, [(Text, Type)], Type, SourcedExpr)
+                -> (Set Text, [(Text, Type)], Type, Typecheck '[ 'ExprPos] (AnnExpr '[ 'ExprType, 'TCType, 'ExprPos]))
+    tycheckFuns (tvars, params, ty, expr) =
+      (tvars, params, ty, withExtraVars params (checkType ty expr))

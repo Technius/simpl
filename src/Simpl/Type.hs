@@ -11,10 +11,12 @@ module Simpl.Type where
 
 import Control.Unification (Unifiable, zipMatch, UTerm)
 import Control.Unification.IntVar (IntVar)
-import Data.Functor.Foldable (Fix(Fix), para)
+import Data.Functor.Foldable (Fix(Fix), para, cata)
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
 import Data.Eq.Deriving (deriveEq1)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Text.Show.Deriving (deriveShow1)
 
 -- * Type System
@@ -51,6 +53,8 @@ instance Unifiable TypeF where
     (NumUnknown, _) -> Just (TyNumber m)
     (_, NumUnknown) -> Just (TyNumber n)
     _ -> if n == m then Just (TyNumber n) else Nothing
+  zipMatch (TyVar v1) (TyVar v2) =
+    if v1 == v2 then Just (TyVar v1) else Nothing
   zipMatch TyBool TyBool = Just TyBool
   zipMatch TyString TyString = Just TyString
   zipMatch (TyAdt n1 tp1) (TyAdt n2 tp2) =
@@ -74,6 +78,16 @@ functionTypeResult (Fix ty) = case ty of
   TyFun _ res -> functionTypeResult res
   _ -> Fix ty
 
+getTypeVars :: Type -> Set Text
+getTypeVars = cata $ \case
+  TyBool -> Set.empty
+  TyString -> Set.empty
+  TyNumber _ -> Set.empty
+  TyVar v -> Set.singleton v
+  TyFun vparams vret -> Set.unions (vret:vparams)
+  TyAdt _ vargs -> Set.unions vargs
+
+
 instance Pretty Type where
   pretty = para go
     where
@@ -87,6 +101,13 @@ instance Pretty Type where
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
       go (TyVar n) = pretty n
+
+-- | A universally quantified type.
+data PolyType a = PolyType (Set Text) a -- ^ The type variables and the Type
+  deriving (Functor, Show, Foldable, Traversable)
+
+$(deriveShow1 ''PolyType)
+$(deriveEq1 ''PolyType)
 
 -- | Unification variable
 type UVar = IntVar

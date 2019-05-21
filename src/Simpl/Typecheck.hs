@@ -165,7 +165,8 @@ inferType = cata $ \ae -> case annGetExpr ae of
     pure $ annotate (App name params') (annGetAnn ae) (typeToUtype ty)
   FunRef name ->
     asks (symTabLookupStaticFun name) >>= \case
-      Just (params, ty, _) ->
+      Just (tvars, params, ty, _) ->
+        -- TODO: Instatiate type variables
         let paramTys = snd <$> params in
           pure $ annotate (FunRef name) (annGetAnn ae) (typeToUtype (Fix $ TyFun paramTys ty))
       Nothing -> throwError $ TyErrNoSuchVar name
@@ -215,7 +216,8 @@ inferType = cata $ \ae -> case annGetExpr ae of
                   expected = TyFun argTys resTy
               throwError $ TyErrMismatch expected got
         Nothing ->
-          let lookupStatic n = fmap (\(p, r, _) -> (p, r)) . symTabLookupStaticFun n
+          -- TODO: Instantiate type variables
+          let lookupStatic n = fmap (\(tvars, p, r, _) -> (p, r)) . symTabLookupStaticFun n
               result = traverse (\f -> asks (f name)) [lookupStatic, symTabLookupExternFun] in
           asum <$> result >>= \case
             Just (params, resTy) -> pure (snd <$> params, resTy)

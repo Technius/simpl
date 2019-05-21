@@ -116,7 +116,7 @@ transformTable :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVa
                => m (SymbolTable (J.AnnExpr '[ 'ExprType]))
 transformTable = do
   table <- asks tcSymTab
-  symTabTraverseExprs (\(args, ty, expr) -> (args, ty, transformExpr expr)) table
+  symTabTraverseExprs (\(tvars, args, ty, expr) -> (tvars, args, ty, transformExpr expr)) table
 
 -- | Perform ANF transformation on the given expression
 transformExpr :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
