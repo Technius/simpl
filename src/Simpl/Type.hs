@@ -36,8 +36,9 @@ data TypeF a
   = TyNumber Numeric
   | TyBool
   | TyString
-  | TyAdt Text
+  | TyAdt Text [a]
   | TyFun [a] a
+  | TyVar Text
   deriving (Show, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
@@ -52,7 +53,10 @@ instance Unifiable TypeF where
     _ -> if n == m then Just (TyNumber n) else Nothing
   zipMatch TyBool TyBool = Just TyBool
   zipMatch TyString TyString = Just TyString
-  zipMatch (TyAdt n1) (TyAdt n2) = if n1 == n2 then Just (TyAdt n1) else Nothing
+  zipMatch (TyAdt n1 tp1) (TyAdt n2 tp2) =
+    if n1 == n2
+    then Just $ TyAdt n1 (Right <$> zip tp1 tp2)
+    else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
     if length as1 == length as2 then
       Just $ TyFun (zipWith (curry Right) as1 as2) (Right (r1, r2))
@@ -79,9 +83,10 @@ instance Pretty Type where
       go (TyNumber n) = pretty n
       go TyBool = "Bool"
       go TyString = "String"
-      go (TyAdt n) = pretty n
+      go (TyAdt n tparams) = pretty n <> hsep (snd <$> tparams)
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
+      go (TyVar n) = pretty n
 
 -- | Unification variable
 type UVar = IntVar

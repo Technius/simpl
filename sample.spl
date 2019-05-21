@@ -1,6 +1,8 @@
-data Foo = Bar Double
+data Foo = { Bar Double }
 
-data MaybeI = JustI Double | Nothing
+data MaybeI = { JustI Double | Nothing }
+
+data Barbar a = { Asdf Int a }
 
 fun not (b : Bool) : Bool := { if b then false else true }
 

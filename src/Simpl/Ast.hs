@@ -206,7 +206,7 @@ instance Pretty Constructor where
 data Decl e
   = DeclFun Text [(Text, Type)] Type e -- ^ A function declaration, in order of
                                        -- name, type, params, expression
-  | DeclAdt Text [Constructor] -- ^ An algebraic data type declaration
+  | DeclAdt Text [Text] [Constructor] -- ^ An algebraic data type declaration
   | DeclExtern Text [(Text, Type)] Type -- ^ A declaration to an external function (C ABI)
   deriving (Show, Functor)
 
@@ -214,8 +214,9 @@ instance Pretty e => Pretty (Decl e) where
   pretty = \case
     DeclFun name params ty expr ->
       funDecl name params ty <+> "{" <> softline <> pretty expr <> softline <> "}"
-    DeclAdt name ctors ->
-      hsep ["data", pretty name] <+> encloseSep "= " emptyDoc " | " (pretty <$> ctors)
+    DeclAdt name tparams ctors ->
+      hsep (["data", pretty name] ++ (pretty <$> tparams))
+      <+> encloseSep "= {" "}" " | " (pretty <$> ctors)
     DeclExtern name params ty -> funDecl name params ty <+> "extern"
     where
       funDecl name params ty =

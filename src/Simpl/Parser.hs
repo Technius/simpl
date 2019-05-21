@@ -178,8 +178,14 @@ typeLit = Fix <$> ((TyNumber <$> numeric)
 typeIdentifier :: Parser m Text
 typeIdentifier = lexeme (Text.pack <$> ((:) <$> C.upperChar <*> many C.alphaNumChar))
 
+typeVar :: Parser m Type
+typeVar = Fix . TyVar <$> identifier
+
 typeAdt :: Parser m Type
-typeAdt = Fix . TyAdt <$> typeIdentifier
+typeAdt = do
+  name <- typeIdentifier
+  tparams <- many typeVar
+  pure $ Fix (TyAdt name tparams)
 
 typeAtom :: Parser m Type
 typeAtom = typeLit <|> typeAdt
@@ -192,7 +198,7 @@ typeFun = lexeme $ do
   pure . Fix $ TyFun (first : init rest) (last rest)
 
 type' :: Parser m Type
-type' = try typeFun <|> typeAtom
+type' = try typeFun <|> typeAtom <|> typeVar <?> "type"
 
 declFunParamList :: Parser m [(Text, Type)]
 declFunParamList = lexeme $ option [] (parens params)
@@ -229,9 +235,12 @@ declAdt :: Parser m (Decl SourcedExpr)
 declAdt = do
   _ <- keyword "data"
   name <- typeIdentifier
+  tparams <- many identifier
   _ <- symbol "="
+  _ <- symbol "{"
   ctors <- constructor `sepBy1` symbol "|"
-  pure $ Ast.DeclAdt name ctors
+  _ <- symbol "}"
+  pure $ Ast.DeclAdt name tparams ctors
 
 decl :: Parser m (Decl SourcedExpr)
 decl = declFun <|> declAdt

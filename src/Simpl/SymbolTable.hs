@@ -26,7 +26,8 @@ buildSymbolTable :: SourceFile e -> SymbolTable e
 buildSymbolTable (SourceFile _ decls) =
   let adts = Map.fromList $ mapMaybe
         (\case
-          DeclAdt name ctors -> Just (name, (Fix (TyAdt name), ctors))
+          DeclAdt name tparams ctors ->
+            Just (name, (Fix (TyAdt name (Fix . TyVar <$> tparams)), ctors))
           _ -> Nothing) decls
       funs = Map.fromList $ mapMaybe
         (\case

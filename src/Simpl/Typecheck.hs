@@ -249,8 +249,9 @@ typeToUtype = cata $ \case
   TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
   TyString -> UTerm TyString
-  TyAdt n -> UTerm (TyAdt n)
+  TyAdt n tparams -> UTerm (TyAdt n tparams) -- TODO: Instantiate variables somewhere
   TyFun args res -> UTerm (TyFun args res)
+  TyVar n -> UTerm (TyVar n)
 
 -- | Get type of an expression, assuming no free variables. Used for debugging.
 getTypeOf :: Expr -> Either TypeError Type

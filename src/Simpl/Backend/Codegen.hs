@@ -274,7 +274,7 @@ controlFlowCodegen val valOper = \case
         let labelName = "case_" <> fromString (Text.unpack name) in
         (name, ) <$> LLVMIR.freshName labelName
     -- Assume the symbol table and type information is correct
-    dataName <- (\case { TyAdt n -> n; _ -> error "" }) <$> lookupValueType val
+    dataName <- (\case { TyAdt n _ -> n; _ -> error "" }) <$> lookupValueType val
     ctors <- gets ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
     let ctorNames = ctorGetName <$> ctors
     let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
@@ -441,13 +441,14 @@ typeToLLVM = go . unfix
         NumUnknown -> LLVM.double
       TyBool -> LLVM.i1
       TyString -> LLVM.ptr RT.stringType
-      TyAdt name -> LLVM.NamedTypeReference (llvmName name)
+      TyAdt name _ -> LLVM.NamedTypeReference (llvmName name)
       TyFun args res ->
         LLVM.ptr $ LLVM.FunctionType
             { LLVM.resultType = typeToLLVM res
             , LLVM.argumentTypes = typeToLLVM <$> args
             , LLVM.isVarArg = False
             }
+      TyVar _ -> error "TODO: Unimplemented"
 
 adtToLLVM :: Text
            -> [Constructor]
