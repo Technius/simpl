@@ -17,7 +17,6 @@ module Simpl.AstToJoinIR
   ( astToJoinIR
   ) where
 
-import Control.Monad.Supply
 import Control.Monad.Reader hiding (guard)
 import Data.Functor.Foldable (Fix(..), unfix)
 import Data.Functor.Identity
@@ -31,6 +30,8 @@ import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
 import Simpl.Type (Type)
+import Simpl.Util.Supply
+import qualified Simpl.Util.Stream as Stream
 
 -- * Public API
 
@@ -68,8 +69,8 @@ type Transform fields = TransformT fields Identity
 
 type MonadFreshVar = MonadSupply Int
 
-varSupply :: [Int]
-varSupply = [0..]
+varSupply :: Stream.Stream Int
+varSupply = Stream.iterate (+1) 0
 
 runTransformT :: Monad m => TransformT flds m a -> TransformCtx flds -> m a
 runTransformT m table

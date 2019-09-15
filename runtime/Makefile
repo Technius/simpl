@@ -18,7 +18,7 @@ libgc.a: bdwgc/.libs/libgc.a
 	cp $^ $@
 
 %.ll: %.c %.h
-	clang-7 $(C_FLAGS) -S -emit-llvm $< -o $@
+	clang $(C_FLAGS) -S -emit-llvm $< -o $@
 
 clean:
 	rm -f *.ll libgc.a

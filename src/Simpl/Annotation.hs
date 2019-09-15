@@ -42,6 +42,7 @@ import Simpl.Type (Type, UType)
 data Fields = ExprType -- ^ Type information
             | TCType -- ^ Typechecker information
             | ExprPos -- ^ Position of expression in source file
+            | ExprTagged -- ^ Whether static type information is available
             deriving (Show)
 
 genSingletons [ ''Fields ]
