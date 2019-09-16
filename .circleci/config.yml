@@ -5,7 +5,7 @@ version: 2
 jobs:
   build:
     docker:
-      - image: technius/simpl-circleci:0.0.1
+      - image: technius/simpl-circleci:0.0.2
 
     steps:
       - checkout
