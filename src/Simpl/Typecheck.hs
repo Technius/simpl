@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -14,11 +15,14 @@ import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
+import Data.Maybe (fromMaybe)
 import Data.Foldable (traverse_, asum)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
 import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Vinyl (Rec((:&)))
 
 import Simpl.Ast
@@ -151,7 +155,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
     -- should be checked first (if invalid, infer function type and reject).
     -- Then check as usual: check parameter count, then check parameter type.
     argsTc <- sequence args
-    (params, ty) <- lookupFun name (extractTy <$> argsTc)
+    (tvars, params, ty) <- lookupFun name (extractTy <$> argsTc)
     -- Check parameter count
     let numParams = length params
     let paramCount = length params
@@ -159,16 +163,22 @@ inferType = cata $ \ae -> case annGetExpr ae of
       throwError $ TyErrArgCount numParams paramCount params
     let unifyExprTy expr pTy =
           annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
+
+    -- Instantiate type variables
+    substMap <- instantiateVars tvars
+    let instParams = substituteUVars substMap . typeToUtype <$> params
+    let resTy = substituteUVars substMap (typeToUtype ty)
     -- Check parameter types
-    params' <- zipWithM unifyExprTy argsTc (typeToUtype <$> params)
+    params' <- zipWithM unifyExprTy argsTc instParams
     -- Annotate with result type
-    pure $ annotate (App name params') (annGetAnn ae) (typeToUtype ty)
+    pure $ annotate (App name params') (annGetAnn ae) resTy
   FunRef name ->
     asks (symTabLookupStaticFun name) >>= \case
       Just (tvars, params, ty, _) ->
-        -- TODO: Instatiate type variables
-        let paramTys = snd <$> params in
-          pure $ annotate (FunRef name) (annGetAnn ae) (typeToUtype (Fix $ TyFun paramTys ty))
+        -- TODO: How to handle polymorphic function?
+        let paramTys = snd <$> params
+            funTy = typeToUtype (Fix $ TyFun paramTys ty) in
+          pure $ annotate (FunRef name) (annGetAnn ae) funTy
       Nothing -> throwError $ TyErrNoSuchVar name
   Cast exprM num -> do
     expr <- exprM
@@ -204,12 +214,13 @@ inferType = cata $ \ae -> case annGetExpr ae of
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
       pure $ annotate (BinOp op x y) annFields rTy
 
-    lookupFun :: Text -> [UType] -> Typecheck fields ([Type], Type)
+    lookupFun :: Text -> [UType] -> Typecheck fields (Set Text, [Type], Type)
     lookupFun name argTys =
       asks (symTabLookupVar name) >>= \case
         Just ty ->
           case unfix ty of
-            TyFun params resTy -> pure (params, resTy)
+            -- TODO: Currently there is no way to know if the function is polymorphic
+            TyFun params resTy -> pure (Set.empty, params, resTy)
             _ -> do
               resTy <- mkMetaVar
               let got = fmap typeToUtype (unfix ty)
@@ -217,10 +228,11 @@ inferType = cata $ \ae -> case annGetExpr ae of
               throwError $ TyErrMismatch expected got
         Nothing ->
           -- TODO: Instantiate type variables
-          let lookupStatic n = fmap (\(tvars, p, r, _) -> (p, r)) . symTabLookupStaticFun n
-              result = traverse (\f -> asks (f name)) [lookupStatic, symTabLookupExternFun] in
+          let lookupStatic n = fmap (\(tvars, p, r, _) -> (tvars, p, r)) . symTabLookupStaticFun n
+              lookupExtern n = fmap (\(p, r) -> (Set.empty, p, r)) . symTabLookupExternFun n
+              result = traverse (\f -> asks (f name)) [lookupStatic, lookupExtern] in
           asum <$> result >>= \case
-            Just (params, resTy) -> pure (snd <$> params, resTy)
+            Just (tvars, params, resTy) -> pure (tvars, snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 
 checkType :: Type -> AnnExpr fields -> Typecheck fields (AnnExpr ('ExprType ': 'TCType ': fields))
@@ -254,6 +266,21 @@ typeToUtype = cata $ \case
   TyAdt n tparams -> UTerm (TyAdt n tparams) -- TODO: Instantiate variables somewhere
   TyFun args res -> UTerm (TyFun args res)
   TyVar n -> UTerm (TyVar n)
+
+-- | Instantiate the type variables with new unification variables
+instantiateVars :: Set Text -> Typecheck fields (Map.Map Text UType)
+instantiateVars tvars = Map.fromList <$> traverse (\n -> (n,) <$> mkMetaVar) (Set.toList tvars)
+
+-- | Given a substitution, replace any matching TVar terms with their
+-- its substituted term.
+substituteUVars :: Map.Map Text UType -> UType -> UType
+substituteUVars = go
+  where
+    go substMap = \case
+      UTerm (TyVar n) -> fromMaybe (UTerm (TyVar n)) (Map.lookup n substMap)
+      UTerm (TyAdt n tparams) -> UTerm (TyAdt n (go substMap <$> tparams))
+      UTerm (TyFun args res) -> UTerm (TyFun (go substMap <$> args) (go substMap res))
+      t -> t
 
 -- | Get type of an expression, assuming no free variables. Used for debugging.
 getTypeOf :: Expr -> Either TypeError Type

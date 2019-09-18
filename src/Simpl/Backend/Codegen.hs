@@ -448,7 +448,7 @@ typeToLLVM = go . unfix
             , LLVM.argumentTypes = typeToLLVM <$> args
             , LLVM.isVarArg = False
             }
-      TyVar _ -> error "TODO: Unimplemented"
+      TyVar _ -> error "compilation of parametrically polymorphic functions not implemented yet"
 
 adtToLLVM :: Text
            -> [Constructor]
