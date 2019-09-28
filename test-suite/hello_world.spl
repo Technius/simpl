@@ -1,0 +1,1 @@
+fun main : Int := { let _ = println("Hello world!") in 0 }

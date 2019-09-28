@@ -4,3 +4,4 @@ simpl-lang.cabal
 /sample
 /runtime/**/*.ll
 /runtime/libgc.a
+/test-suite/bin
