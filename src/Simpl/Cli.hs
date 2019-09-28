@@ -5,7 +5,9 @@ import Options.Applicative
 
 data CliCmd
   = Compile { -- | Name of the source file
-              fileName :: String
+              sourceFile :: String
+              -- | Name of the output file
+            , outputFile :: String
               -- | Compilation target
             , target :: Target
               -- | Whether the LLVM IR should be printed on stderr
@@ -29,7 +31,8 @@ cliProgram = info (helper <*> compileCommand) mempty
 
 compileCommand :: Parser CliCmd
 compileCommand = Compile <$>
-  strArgument (metavar "file_name")
+  strArgument (metavar "source_file")
+  <*> strOption (short 'o' <> long "output" <> value "a.out")
   <*> option targetReader (short 'T' <> long "target" <> value NativeTarget)
   <*> switch (long "dump-ir")
   <*> switch (long "diagnostics")

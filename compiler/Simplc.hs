@@ -58,7 +58,7 @@ main = do
 appLogic :: CliM ()
 appLogic = do
   options <- ask
-  ast <- readSourceFile (Cli.fileName options)
+  ast <- readSourceFile (Cli.sourceFile options)
   codegen ast
 
 codegen :: SourceFile SourcedExpr -> CliM ()
@@ -71,6 +71,7 @@ codegen srcFile@(SourceFile _ decls) =
       let pipeline = ExceptT (fullCompilerPipeline compilerOpts srcFile)
       programAst <- CliM . lift $ withExceptT (pure . ("Error: " ++) . show) pipeline
       dumpIR <- asks Cli.dumpIR
+      outputName <- asks Cli.outputFile
       handleExceptions . liftIO $
         withContext $ \cr ->
           buildRuntime cr $ \runtimeMod ->
@@ -78,7 +79,7 @@ codegen srcFile@(SourceFile _ decls) =
               linkModules programMod runtimeMod
               when dumpIR $
                 moduleLLVMAssembly programMod >>= B.hPutStr stderr
-              outputModule programMod
+              outputModule programMod outputName
     _ -> throwError $ ["No main function found"]
   where
     isMain = \case
@@ -113,7 +114,7 @@ buildModule modAst cont =
       putStrLn "AST verified successfully"
       cont llvmMod
 
-outputModule :: Module -> IO ()
-outputModule llvmMod =
+outputModule :: Module -> FilePath -> IO ()
+outputModule llvmMod outputName =
   withHostTargetMachine $ \target ->
-    writeObjectToFile target (File "sample.o") llvmMod
+    writeObjectToFile target (File outputName) llvmMod
