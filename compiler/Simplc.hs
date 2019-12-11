@@ -18,7 +18,7 @@ import Simpl.Compiler
 import Simpl.CompilerOptions
 import qualified Simpl.Cli as Cli
 import qualified Simpl.Parser as Parser
-import LLVM.Target (withHostTargetMachine)
+import LLVM.Target (withHostTargetMachineDefault)
 import qualified LLVM.AST
 import LLVM.Module ( File(File), withModuleFromAST
                    , writeObjectToFile , moduleLLVMAssembly, linkModules, Module)
@@ -116,5 +116,5 @@ buildModule modAst cont =
 
 outputModule :: Module -> FilePath -> IO ()
 outputModule llvmMod outputName =
-  withHostTargetMachine $ \target ->
+  withHostTargetMachineDefault $ \target ->
     writeObjectToFile target (File outputName) llvmMod
