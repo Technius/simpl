@@ -19,7 +19,7 @@ Current language features:
 
 ## Compiling
 
-LLVM 7 and clang 7 must be installed. 
+LLVM 9 and clang 9 must be installed.
 
 To compile, run `stack build`. When developing, use the `--fast` flag. A
 `test.sh` script is provided to quickly test compilation.

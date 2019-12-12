@@ -175,18 +175,17 @@ llvmName = LLVM.mkName . Text.unpack
 -- | Generates LLVM code for a literal.
 literalCodegen :: LLVMIR.MonadIRBuilder m => Literal -> m LLVM.Operand
 literalCodegen = \case
-  LitInt x -> LLVMIR.int64 (fromIntegral x)
-  LitDouble x -> LLVMIR.double x
-  LitBool b -> LLVMIR.bit (if b then 1 else 0)
+  LitInt x -> pure $ LLVMIR.int64 (fromIntegral x)
+  LitDouble x -> pure $ LLVMIR.double x
+  LitBool b -> pure $ LLVMIR.bit (if b then 1 else 0)
   LitString t -> do
     -- TODO: Store literal strings in global memory
     let byteS = encodeUtf8 t
     let len = toInteger (BS.length byteS)
-    lenOper <- LLVMIR.int64 len
+    let lenOper = LLVMIR.int64 len
     let byteData = LLVMC.Int 8 . toInteger <$> BS.unpack byteS
-    byteDataOper <- LLVMIR.array byteData
     byteDataPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger len) LLVM.i8) Nothing 0
-    _ <- LLVMIR.store byteDataPtr 0 byteDataOper
+    _ <- LLVMIR.store byteDataPtr 0 (LLVMIR.array byteData)
     byteDataPtr' <- LLVMIR.bitcast byteDataPtr (LLVM.ptr LLVM.i8)
     bytePtr <- LLVMIR.call RT.mallocRef [(lenOper, [])]
     _ <- LLVMIR.call RT.memcpyRef [(bytePtr, []), (byteDataPtr', []), (lenOper, [])]
@@ -290,9 +289,9 @@ controlFlowCodegen val valOper = \case
       let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
       LLVMIR.emitBlockStart label
       ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
-      ctorPtrOffset <- LLVMIR.int32 0
+      let ctorPtrOffset = LLVMIR.int32 0
       bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, llvmTy)) -> do
-        ctorPtrIndex <- LLVMIR.int32 i
+        let ctorPtrIndex = LLVMIR.int32 i
         -- Need to bitcast the ptr type because we need a concrete type. We
         -- also need to load the data immediately because of how variables
         -- are implemented.
@@ -341,26 +340,23 @@ callableCodegen callable args = case callable of
   CCtor name -> do
     -- Assume constructor exists, since typechecker should verify it anyways
     (dataTy, ctorName, ctorIndex) <- gets (fromJust . Map.lookup name . tableCtors)
-    ctorIndex' <- LLVMIR.int32 (fromIntegral ctorIndex)
     let tagStruct1 = LLVM.ConstantOperand $ LLVMC.Undef (LLVM.NamedTypeReference dataTy)
-    -- Tag
-    tagStruct2 <- LLVMIR.insertValue tagStruct1 ctorIndex' [0]
-    -- Data pointer
+    -- Tag (index = 0)
+    tagStruct2 <- LLVMIR.insertValue tagStruct1 (LLVMIR.int32 (fromIntegral ctorIndex)) [0]
+    -- Data pointer (index = 1)
     let ctorTy = LLVM.NamedTypeReference ctorName
     let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
     -- Use offsets to calculate struct size
-    ctorStructSize <- flip LLVMIR.ptrtoint LLVM.i64
-                      =<< LLVMIR.gep nullptr
-                      =<< pure <$> LLVMIR.int32 0
+    ctorStructSize <- LLVMIR.gep nullptr [LLVMIR.int32 0]
+                      >>= flip LLVMIR.ptrtoint LLVM.i64
     -- Allocate memory for constructor.
     -- For now, use "leak memory" as an implementation strategy for deallocation.
     ctorStructPtr <- LLVMIR.call RT.mallocRef [(ctorStructSize, [])] >>=
                      flip LLVMIR.bitcast (LLVM.ptr ctorTy)
     values <- traverse jvalueCodegen args
-    indices <- traverse LLVMIR.int32 [0..fromIntegral (length values - 1)]
-    ptrOffset <- LLVMIR.int32 0
-    forM_ (indices `zip`  values) $ \(index, v) -> do
-      valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, index]
+    let ptrOffset = LLVMIR.int32 0
+    forM_ ([0..(length values - 1)] `zip`  values) $ \(index, v) -> do
+      valuePtr <- LLVMIR.gep ctorStructPtr [ptrOffset, LLVMIR.int32 (fromIntegral index)]
       LLVMIR.store valuePtr 0 v
       pure ()
     dataPtr <- LLVMIR.bitcast ctorStructPtr (LLVM.ptr LLVM.i8)
@@ -371,15 +367,14 @@ callableCodegen callable args = case callable of
       let fmtStr = encodeUtf8 (fromString "Print: %s\n\0")
       let fmtStrLen = toInteger (BS.length fmtStr)
       let fmtStrData = LLVMC.Int 8 . toInteger <$> BS.unpack fmtStr
-      fmtStrOper <- LLVMIR.array fmtStrData
       fmtStrPtr <- LLVMIR.alloca (LLVM.ArrayType (fromInteger fmtStrLen) LLVM.i8) Nothing 0
-      _ <- LLVMIR.store fmtStrPtr 0 fmtStrOper
+      _ <- LLVMIR.store fmtStrPtr 0 (LLVMIR.array fmtStrData)
       printf <- gets tablePrintf
       str <- jvalueCodegen val
       exprCstring <- LLVMIR.call RT.stringCstringRef [(str, [])]
       fmtStrPtr' <- LLVMIR.bitcast fmtStrPtr (LLVM.ptr LLVM.i8)
       _ <- LLVMIR.call printf [(fmtStrPtr', []), (exprCstring, [])]
-      LLVMIR.int64 0
+      pure $ LLVMIR.int64 0
     _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
   CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
 
@@ -533,8 +528,7 @@ moduleCodegen srcCode symTab = mdo
     when diagnosticsEnabled $ LLVMIR.call RT.printfRef [(exprSrc, [])] >> pure ()
     exprResult <- LLVMIR.call mainRef []
     when diagnosticsEnabled $ LLVMIR.call RT.printfRef [(resultFmt, []), (exprResult, [])] >> pure ()
-    retcode <- LLVMIR.int64 1
-    LLVMIR.ret retcode
+    LLVMIR.ret (LLVMIR.int64 1)
   pure ()
 
 runCodegen :: HasType fields => CompilerOpts -> String -> SymbolTable (AnnExpr fields) -> LLVM.Module
