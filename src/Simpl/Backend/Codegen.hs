@@ -377,6 +377,21 @@ callableCodegen callable args = case callable of
       pure $ LLVMIR.int64 0
     _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
   CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
+  CTag -> case args of
+    [val] -> do
+      -- TODO: tag lookup
+      error "CTag compilation: Unimplemented"
+    _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
+  CUntag -> case args of
+    [jval] -> do
+      val <- jvalueCodegen jval
+      typeTag <- LLVMIR.call RT.taggedTagRef [(val, [])]
+      len <- LLVMIR.call RT.tagSizeRef [(typeTag, [])]
+      bytesPtr <- LLVMIR.call RT.taggedUnboxRef [(val, [])]
+      -- TODO: lookup LLVM type
+      -- LLVMIR.bitcast bytesPtr _
+      error "CUntag compilation: Unimplemented"
+    _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
 
 -- | Generates code for a [JExpr]
 jexprCodegen

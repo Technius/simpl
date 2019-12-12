@@ -97,13 +97,39 @@ stringFuns = [ ("simpl_string_cstring", stringCstringType)
 stringStructs :: [String]
 stringStructs = ["simpl_string"]
 
+-- * Tags
+
+typeTagType :: LLVM.Type
+typeTagType = runtimeStruct "simpl_type_tag"
+
+taggedValueType :: LLVM.Type
+taggedValueType = runtimeStruct "simpl_tagged_value"
+
+tagSizeType, taggedTagType, taggedUnboxType :: FunType
+tagSizeType = mkFunType [("t", LLVM.ptr typeTagType)] LLVM.i64
+taggedTagType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr taggedValueType)
+taggedUnboxType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr LLVM.void)
+
+tagSizeRef, taggedTagRef, taggedUnboxRef :: LLVM.Operand
+tagSizeRef = runtimeFunRef "simpl_tag_size" tagSizeType
+taggedTagRef = runtimeFunRef "simpl_tagged_tag" taggedTagType
+taggedUnboxRef = runtimeFunRef "simpl_tagged_unbox" taggedUnboxType
+
+runtimeTypeFuns :: [(String, FunType)]
+runtimeTypeFuns = [ ("simpl_tag_size", tagSizeType)
+                  , ("simpl_tagged_tag", taggedTagType)
+                  , ("simpl_tagged_unbox", taggedUnboxType) ]
+
+runtimeTypeStructs :: [String]
+runtimeTypeStructs = ["simpl_type_tag", "simpl_tagged_value"]
+
 -- * Entire runtime
 
 allRuntimeFuns :: [(String, FunType)]
-allRuntimeFuns = join [cstdlibFuns, stringFuns]
+allRuntimeFuns = join [cstdlibFuns, stringFuns, runtimeTypeFuns]
 
 allRuntimeStructs :: [String]
-allRuntimeStructs = stringStructs
+allRuntimeStructs = stringStructs ++ runtimeTypeStructs
 
 emitRuntimeDecls :: LLVMIR.MonadModuleBuilder m => m ()
 emitRuntimeDecls = do

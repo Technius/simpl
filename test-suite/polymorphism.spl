@@ -1,0 +1,6 @@
+fun id (x: a) : a := { x }
+
+fun main : Int := {
+    let _ = println(@id("hi")) in
+    0
+}

@@ -39,6 +39,8 @@ data Callable
   | CCtor !Name -- ^ ADT constructor
   | CPrint -- ^ Print string (temporary)
   | CFunRef !Name -- ^ Static function reference
+  | CTag -- ^ Create a boxed representation of the given value
+  | CUntag -- ^ Unbox the value
   deriving (Show)
 
 -- | A value
@@ -124,6 +126,8 @@ instance Pretty Callable where
     CCtor name -> pretty name
     CPrint -> "print"
     CFunRef name -> "funref[" <> pretty name <> "]"
+    CTag -> "tag"
+    CUntag -> "untag"
 
 instance Pretty JValue where
   pretty = \case

@@ -45,3 +45,15 @@ int simpl_string_print(const struct simpl_string* s) {
   free(cstring);
   return 0;
 }
+
+int simpl_tagged_size(const struct simpl_type_tag* const tag) {
+    return tag->size;
+}
+
+const struct simpl_type_tag* const simpl_tagged_tag(struct simpl_tagged_value* value) {
+    return value->type_tag;
+}
+
+void* simpl_tagged_unbox(struct simpl_tagged_value* value) {
+    return value->data;
+}
