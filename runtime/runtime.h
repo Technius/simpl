@@ -50,6 +50,11 @@ struct simpl_type_tag {
 };
 
 /**
+ * Returns the size recorded in the type tag.
+ */
+int simpl_tag_size(const struct simpl_type_tag* const);
+
+/**
  * A value tagged with its type tag. Used for polymorphic functions and
  * variables.
  */
@@ -57,11 +62,6 @@ struct simpl_tagged_value {
     const struct simpl_type_tag* const type_tag;
     void* data;
 };
-
-/**
- * Returns the size recorded in the type tag.
- */
-int simpl_tag_size(const struct simpl_type_tag* const);
 
 /**
  * Returns the type tag of a tagged value.
