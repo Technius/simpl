@@ -41,6 +41,7 @@ data TypeF a
   | TyAdt Text [a]
   | TyFun [a] a
   | TyVar Text
+  | TyBox a -- ^ Boxed polymorphic type
   deriving (Show, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
@@ -63,9 +64,11 @@ instance Unifiable TypeF where
     else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
     if length as1 == length as2 then
+      -- TODO: Check by alpha-equivalence instead of raw equality
       Just $ TyFun (zipWith (curry Right) as1 as2) (Right (r1, r2))
     else
       Nothing
+  zipMatch (TyBox t1) (TyBox t2) = Just $ TyBox (Right (t1, t2))
   zipMatch _ _ = Nothing
 
 isComplexType :: TypeF a -> Bool
@@ -86,6 +89,7 @@ getTypeVars = cata $ \case
   TyVar v -> Set.singleton v
   TyFun vparams vret -> Set.unions (vret:vparams)
   TyAdt _ vargs -> Set.unions vargs
+  TyBox vs -> vs
 
 
 instance Pretty Type where
@@ -101,6 +105,7 @@ instance Pretty Type where
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
       go (TyVar n) = pretty n
+      go (TyBox b) = "#<" <> snd b <> ">"
 
 -- | A universally quantified type.
 data PolyType a = PolyType (Set Text) a -- ^ The type variables and the Type

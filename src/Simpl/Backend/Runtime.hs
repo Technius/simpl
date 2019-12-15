@@ -109,16 +109,19 @@ tagSizeType, taggedTagType, taggedUnboxType :: FunType
 tagSizeType = mkFunType [("t", LLVM.ptr typeTagType)] LLVM.i64
 taggedTagType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr taggedValueType)
 taggedUnboxType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr LLVM.void)
+taggedBoxType = mkFunType [("t", LLVM.ptr taggedValueType), ("d", LLVM.ptr LLVM.void)] (LLVM.ptr typeTagType)
 
 tagSizeRef, taggedTagRef, taggedUnboxRef :: LLVM.Operand
 tagSizeRef = runtimeFunRef "simpl_tag_size" tagSizeType
 taggedTagRef = runtimeFunRef "simpl_tagged_tag" taggedTagType
 taggedUnboxRef = runtimeFunRef "simpl_tagged_unbox" taggedUnboxType
+taggedBoxRef = runtimeFunRef "simpl_tagged_box" taggedBoxType
 
 runtimeTypeFuns :: [(String, FunType)]
 runtimeTypeFuns = [ ("simpl_tag_size", tagSizeType)
                   , ("simpl_tagged_tag", taggedTagType)
-                  , ("simpl_tagged_unbox", taggedUnboxType) ]
+                  , ("simpl_tagged_unbox", taggedUnboxType)
+                  , ("simpl_tagged_box", taggedBoxType) ]
 
 runtimeTypeStructs :: [String]
 runtimeTypeStructs = ["simpl_type_tag", "simpl_tagged_value"]
