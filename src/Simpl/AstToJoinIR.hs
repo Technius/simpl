@@ -22,14 +22,20 @@ import Data.Functor.Foldable (Fix(..), unfix)
 import Data.Functor.Identity
 import Data.Text (Text)
 import Data.String (fromString)
+import Data.Maybe (fromJust)
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
+
+import Debug.Trace
 
 import Simpl.Annotation
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
-import Simpl.Type (Type)
+import Simpl.Type (Type, TypeF(TyBox, TyVar))
+import Simpl.Typecheck (literalType)
 import Simpl.Util.Supply
 import qualified Simpl.Util.Stream as Stream
 
@@ -40,21 +46,25 @@ astToJoinIR table = runTransform transformTable (defaultCtx table)
 
 -- * Transformation Monad
 
+data BoxedVal = Boxed | Unboxed deriving (Show, Eq, Ord)
+
 data TransformCtx fields = TransformCtx
   { tcSymTab :: SymbolTable (A.AnnExpr fields)
   , tcJoinLabels :: Set Text
+  , tcBoxStatus :: Map Text BoxedVal
   }
 
 defaultCtx :: SymbolTable (A.AnnExpr flds) -> TransformCtx flds
-defaultCtx table = TransformCtx { tcSymTab = table, tcJoinLabels = Set.empty }
-
-modifySymTab :: (SymbolTable (A.AnnExpr flds) -> SymbolTable (A.AnnExpr flds))
-             -> TransformCtx flds
-             -> TransformCtx flds
-modifySymTab f ctx = ctx { tcSymTab = f (tcSymTab ctx) }
+defaultCtx table = TransformCtx
+  { tcSymTab = table
+  , tcJoinLabels = Set.empty
+  , tcBoxStatus = Map.empty }
 
 insertVar :: Text -> Type -> TransformCtx flds -> TransformCtx flds
-insertVar name ty = modifySymTab (symTabInsertVar name ty)
+insertVar name ty ctx = ctx
+  { tcSymTab = symTabInsertVar name ty (tcSymTab ctx)
+  , tcBoxStatus = Map.insert name (boxedVal ty) (tcBoxStatus ctx)
+  }
 
 newtype TransformT fields m a =
   TransformT { unTransform :: ReaderT (TransformCtx fields) (SupplyT Int m) a }
@@ -109,6 +119,38 @@ makeJexpr ty = Fix . addField (withType ty) . toAnnExprF
 
 astType :: HasType flds => A.AnnExpr flds -> Type
 astType = getType . unfix
+
+getJvalueType :: MonadReader (TransformCtx flds) m => J.JValue -> m Type
+getJvalueType = \case
+  J.JVar n -> asks (fromJust . symTabLookupVar n . tcSymTab)
+  J.JLit l -> pure . Fix $ literalType l
+
+-- | Get boxed type. Left is unboxed, right is boxed.
+boxedType :: Type -> Either Type Type
+boxedType = \case
+  t@(Fix (TyVar _)) -> Right t
+  Fix (TyBox t) -> Right t
+  t -> Left t
+
+isBoxed :: Type -> Bool
+isBoxed t = case boxedType t of { Left _ -> False; Right _ -> True }
+
+boxedVal :: Type -> BoxedVal
+boxedVal t = if isBoxed t then Boxed else Unboxed
+
+rebindBoxing :: (HasType flds, MonadFreshVar m, MonadReader (TransformCtx flds) m)
+             => J.JValue     -- ^ Variable name
+             -> Type     -- ^ Variable type
+             -> BoxedVal -- ^ Whether to ensure boxed or unboxed
+             -> m (J.JValue, J.AnnExpr '[ 'ExprType] -> J.AnnExpr '[ 'ExprType])
+rebindBoxing val ty b = do
+  let create ty' action = do
+        name <- case val of { J.JVar n -> pure n; _ -> freshVar }
+        local (insertVar name ty') (pure (J.JVar name, makeJexpr ty' . J.JApp name action [val]))
+  case (boxedType ty, b) of
+    (Right ty', Unboxed) -> create ty' J.CUntag
+    (Left ty', Boxed) -> create (Fix (TyBox ty')) J.CTag
+    _ -> pure (val, id)
 
 -- * ANF Transformation
 
@@ -171,7 +213,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.Case branches expr ->
     anfTransform expr $ \jexpr -> do
       lbl <- freshLabel
-      let jexprTy = getType (unfix expr)
+      let jexprTy = astType expr
       jbranches <- traverse (transformBranch (J.JJump lbl)) branches
       let jexprCfe = J.Cfe (makeJexpr jexprTy (J.JVal jexpr)) (J.JCase jbranches)
       name <- freshVar
@@ -180,23 +222,33 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
         local (insertVar name ty) (cont (J.JVar name))
   A.Cons ctorName args ->
     collectArgs args $ \argVals -> do
+      -- TODO: find and box polymorphic args
       varName <- freshVar
       makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.App funcName args ->
     collectArgs args $ \argVals -> do
       varName <- freshVar
-      makeJexpr ty . J.JApp varName (J.CFunc funcName) argVals <$>
-        local (insertVar varName ty) (cont (J.JVar varName))
+      (_, funcArgs, funcRetTy, _) <- asks (fromJust . symTabLookupStaticFun funcName . tcSymTab)
+      argTys <- traverse getJvalueType argVals
+      tuples <- sequence [rebindBoxing val aTy (boxedVal faTy)
+                         | (((_, faTy), val), aTy) <- funcArgs `zip` argVals `zip` argTys]
+      let (argVals', boxConvArgs_) = unzip tuples
+      let boxConvArgs = foldl (.) id boxConvArgs_
+      let ty' = if isBoxed funcRetTy then Fix (TyBox ty) else ty
+      boxConvArgs . makeJexpr ty' . J.JApp varName (J.CFunc funcName) argVals' <$>
+        local (insertVar varName ty') (cont (J.JVar varName))
   A.Cast expr numTy ->
     anfTransform expr $ \jexpr -> do
       varName <- freshVar
       makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr] <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.Print expr ->
-    anfTransform expr $ \jexpr -> do
+    anfTransform expr $ \jval -> do
       varName <- freshVar
-      makeJexpr ty . J.JApp varName J.CPrint [jexpr] <$>
+      valTy <- getJvalueType jval
+      (jval', boxConv) <- rebindBoxing jval valTy Unboxed
+      boxConv . makeJexpr ty . J.JApp varName J.CPrint [jval'] <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.FunRef name -> do
     varName <- freshVar
