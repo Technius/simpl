@@ -1,5 +1,19 @@
 fun id (x: a) : a := { x }
 
+data Foo = { Bar Int | Nope }
+
+fun test_data (f : Foo) : Foo := {
+  case @id(f) of
+    Bar y => f
+    Nope => f
+}
+
+fun test_case (x : Int) : String := {
+  @id(case Bar x of
+    Bar y => @id("hi")
+    Nope => "bye")
+}
+
 fun main : Int := {
     let _ = println(@id("hi")) in
     let y = 5 in

@@ -150,6 +150,18 @@ rebindBoxing val ty b = do
     (Left ty', Boxed) -> create (Fix (TyBox ty')) J.CTag
     _ -> pure (val, id)
 
+-- | If needed, rebinds the given value to match the boxing target.
+withRebindBoxing :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
+                 => BoxedVal -- ^Boxing target
+                 -> (J.JValue -> J.JExprF (J.AnnExpr '[ 'ExprType]))
+                 -> J.JValue -- ^Expression value
+                 -> m (J.AnnExpr '[ 'ExprType])
+withRebindBoxing boxVal f val = do
+  ty <- getJvalueType val
+  (val', boxConv) <- rebindBoxing val ty boxVal
+  ty' <- getJvalueType val'
+  pure . boxConv . makeJexpr ty' . f $ val'
+
 -- * ANF Transformation
 
 -- | Perform ANF transformation on the given symbol table
@@ -157,21 +169,26 @@ transformTable :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVa
                => m (SymbolTable (J.AnnExpr '[ 'ExprType]))
 transformTable = do
   table <- asks tcSymTab
-  symTabTraverseExprs (\(tvars, args, ty, expr) -> (tvars, args, ty, transformExpr expr)) table
+  flip symTabTraverseExprs table $ \(tvars, args, ty, expr) ->
+    -- Initialize boxing status first, then transform
+    let initVars tab = foldl (flip (uncurry insertVar)) tab args
+    in (tvars, args, ty, local initVars (transformExpr expr (boxedVal ty)))
 
 -- | Perform ANF transformation on the given expression
 transformExpr :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
               => A.AnnExpr flds
+              -> BoxedVal -- ^ Expected boxing of the final value
               -> m (J.AnnExpr '[ 'ExprType])
-transformExpr expr = anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
+transformExpr expr boxVal = anfTransform expr $ withRebindBoxing boxVal J.JVal
 
 -- | Perform ANF transformation on the branch, afterwards handling control flow.
 transformBranch :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
                 => J.ControlFlow (J.AnnExpr '[ 'ExprType]) -- ^ Control flow handler
+                -> BoxedVal -- ^ Whether branch is expected to be boxed
                 -> A.Branch (A.AnnExpr flds) -- ^ Branches
                 -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
-transformBranch cf (A.BrAdt adtName argNames expr) = do
-  jexpr <- anfTransform expr (pure . makeJexpr (astType expr) . J.JVal)
+transformBranch cf boxVal (A.BrAdt adtName argNames expr) = do
+  jexpr <- anfTransform expr $ withRebindBoxing boxVal J.JVal
   pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
 
 
@@ -202,27 +219,28 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
           local (insertVar name ty) (cont (J.JVar name))
   A.If guard trueBr falseBr ->
     anfTransform guard $ \jguard -> do
-      lbl <- freshLabel
-      let transformBr br = anfTransform br $ \result -> do
-            rTy <- getJvalueType result
-            (result', boxConv) <- rebindBoxing result rTy (boxedVal ty)
-            pure . boxConv . makeJexpr (astType br) . J.JVal $ result'
+      -- Guard must be unboxed to compare for truthiness
+      guardTy <- getJvalueType jguard
+      (jguard', boxConv) <- rebindBoxing jguard guardTy Unboxed
+      let guardCfe = boxConv (makeJexpr guardTy (J.JVal jguard'))
+      -- Handle branches
+      let transformBr br = anfTransform br $ withRebindBoxing (boxedVal ty) J.JVal
       trueBr'  <- transformBr trueBr
       falseBr' <- transformBr falseBr
-      name <- freshVar
+      lbl <- freshLabel
       let jmp = J.JJump lbl
-      let guardTy = getType (unfix guard)
-      let guardCfe = makeJexpr guardTy (J.JVal jguard)
       let cfe = J.Cfe guardCfe (J.JIf (J.Cfe trueBr' jmp) (J.Cfe falseBr' jmp))
       -- TODO: Make JJoin node placement more efficient
+      name <- freshVar
       makeJexpr ty . J.JJoin lbl name cfe <$>
         local (insertVar name ty) (cont (J.JVar name))
   A.Case branches expr ->
     anfTransform expr $ \jexpr -> do
+      -- Case value must be unboxed
+      jexpr' <- withRebindBoxing Unboxed J.JVal jexpr
       lbl <- freshLabel
-      let jexprTy = astType expr
-      jbranches <- traverse (transformBranch (J.JJump lbl)) branches
-      let jexprCfe = J.Cfe (makeJexpr jexprTy (J.JVal jexpr)) (J.JCase jbranches)
+      jbranches <- traverse (transformBranch (J.JJump lbl) (boxedVal ty)) branches
+      let jexprCfe = J.Cfe jexpr' (J.JCase jbranches)
       name <- freshVar
       -- TODO: Make JJoin node placement more efficient
       makeJexpr ty . J.JJoin lbl name jexprCfe <$>
@@ -250,6 +268,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
       varName <- freshVar
       valTy <- getJvalueType jexpr
       (jexpr', boxConv) <- rebindBoxing jexpr valTy Unboxed
+      -- Resulting value is unboxed, so use original type
       boxConv . makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr'] <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.Print expr ->
@@ -257,6 +276,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
       varName <- freshVar
       valTy <- getJvalueType jval
       (jval', boxConv) <- rebindBoxing jval valTy Unboxed
+      -- Resulting value is unboxed, so use original type
       boxConv . makeJexpr ty . J.JApp varName J.CPrint [jval'] <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.FunRef name -> do
