@@ -137,12 +137,14 @@ lookupTypeTag ty =
             TyBool -> "Bool"
             _ -> error "TODO"
       let llvmTy = typeToLLVM (Fix ty)
-      let nullptr = LLVMC.Null (LLVM.ptr RT.typeTagType)
       let size = LLVMC.sizeof llvmTy
       let tagContents = LLVMC.Struct { LLVMC.structName = Nothing
                                      , LLVMC.isPacked = False
                                      , LLVMC.memberValues = [size] }
-      LLVMIR.global (LLVM.mkName $ "simpl.tag." ++ name) RT.typeTagType tagContents
+      let lname = LLVM.mkName $ "simpl.tag." ++ Text.unpack name
+      oper <- LLVMIR.global lname RT.typeTagType tagContents
+      modify (\t -> t { tableTypeTags = Map.insert ty oper (tableTypeTags t) })
+      pure oper
 
 bindVariable :: MonadState CodegenTable m
              => Text
