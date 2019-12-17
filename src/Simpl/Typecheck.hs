@@ -266,6 +266,7 @@ typeToUtype = cata $ \case
   TyAdt n tparams -> UTerm (TyAdt n tparams) -- TODO: Instantiate variables somewhere
   TyFun args res -> UTerm (TyFun args res)
   TyVar n -> UTerm (TyVar n)
+  TyBox _ -> error "TyBox should not be in SimPL AST"
 
 -- | Instantiate the type variables with new unification variables
 instantiateVars :: Set Text -> Typecheck fields (Map.Map Text UType)

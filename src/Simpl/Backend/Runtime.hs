@@ -100,18 +100,21 @@ stringStructs = ["simpl_string"]
 -- * Tags
 
 typeTagType :: LLVM.Type
-typeTagType = runtimeStruct "simpl_type_tag"
+typeTagType = LLVM.StructureType
+  { LLVM.isPacked = False
+  -- Size
+  , LLVM.elementTypes = [LLVM.i32] }
 
 taggedValueType :: LLVM.Type
 taggedValueType = runtimeStruct "simpl_tagged_value"
 
-tagSizeType, taggedTagType, taggedUnboxType :: FunType
+tagSizeType, taggedTagType, taggedBoxType, taggedUnboxType :: FunType
 tagSizeType = mkFunType [("t", LLVM.ptr typeTagType)] LLVM.i64
 taggedTagType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr taggedValueType)
+taggedBoxType = mkFunType [("t", LLVM.ptr typeTagType), ("d", LLVM.ptr LLVM.void)] (LLVM.ptr taggedValueType)
 taggedUnboxType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr LLVM.void)
-taggedBoxType = mkFunType [("t", LLVM.ptr taggedValueType), ("d", LLVM.ptr LLVM.void)] (LLVM.ptr typeTagType)
 
-tagSizeRef, taggedTagRef, taggedUnboxRef :: LLVM.Operand
+tagSizeRef, taggedTagRef, taggedBoxRef, taggedUnboxRef :: LLVM.Operand
 tagSizeRef = runtimeFunRef "simpl_tag_size" tagSizeType
 taggedTagRef = runtimeFunRef "simpl_tagged_tag" taggedTagType
 taggedUnboxRef = runtimeFunRef "simpl_tagged_unbox" taggedUnboxType
@@ -137,5 +140,7 @@ allRuntimeStructs = stringStructs ++ runtimeTypeStructs
 emitRuntimeDecls :: LLVMIR.MonadModuleBuilder m => m ()
 emitRuntimeDecls = do
   forM_ allRuntimeFuns (uncurry emitRuntimeFun)
-  forM_ allRuntimeStructs $ \name -> do
+  forM_ allRuntimeStructs $ \name ->
     LLVMIR.typedef (LLVM.mkName ("struct." <> name)) Nothing
+  _ <- LLVMIR.typedef (LLVM.mkName ("struct.simpl_type_tag")) (Just typeTagType)
+  pure ()

@@ -15,6 +15,7 @@ import Data.Functor.Foldable (Fix(Fix), para, cata)
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
 import Data.Eq.Deriving (deriveEq1)
+import Data.Ord.Deriving (deriveOrd1)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Text.Show.Deriving (deriveShow1)
@@ -25,7 +26,7 @@ import Text.Show.Deriving (deriveShow1)
 data Numeric = NumDouble -- ^ 64-bit floating point
              | NumInt -- ^ 64-bit signed integer
              | NumUnknown -- ^ Unknown (defaults to 64-bit floating point)
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 instance Pretty Numeric where
   pretty = \case
@@ -42,12 +43,13 @@ data TypeF a
   | TyFun [a] a
   | TyVar Text
   | TyBox a -- ^ Boxed polymorphic type
-  deriving (Show, Functor, Foldable, Traversable)
+  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
 
 $(deriveShow1 ''TypeF)
 $(deriveEq1 ''TypeF)
+$(deriveOrd1 ''TypeF)
 
 instance Unifiable TypeF where
   zipMatch (TyNumber n) (TyNumber m) = case (n, m) of

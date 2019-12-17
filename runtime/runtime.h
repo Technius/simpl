@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdint.h>
 
 #ifndef RUNTIME_H
 #define RUNTIME_H
@@ -46,20 +47,20 @@ struct simpl_type_tag {
     /**
      * The size (e.g. when compiled) of the type, in bytes.
      */
-    unsigned int size;
+    uint32_t size;
 };
 
 /**
  * Returns the size recorded in the type tag.
  */
-int simpl_tag_size(const struct simpl_type_tag* const);
+uint32_t simpl_tag_size(const struct simpl_type_tag* const);
 
 /**
  * A value tagged with its type tag. Used for polymorphic functions and
  * variables.
  */
 struct simpl_tagged_value {
-    const struct simpl_type_tag* const type_tag;
+    const struct simpl_type_tag* type_tag;
     void* data;
 };
 

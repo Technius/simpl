@@ -48,7 +48,7 @@ import Simpl.Annotation hiding (AnnExpr, AnnExprF)
 import Simpl.Ast (BinaryOp(..), Constructor(..), Literal(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Type (Type, TypeF(..), Numeric(..))
+import Simpl.Type (Type(..), TypeF(..), Numeric(..))
 import Simpl.Typecheck (literalType)
 import Simpl.Backend.Runtime ()
 import Simpl.JoinIR.Syntax
@@ -61,7 +61,8 @@ data CodegenTable =
                  , tableFuns :: Map Text LLVM.Operand
                  , tableJoinValues :: Map Text (LLVM.Name, [(LLVM.Operand, LLVM.Name)])
                  , tablePrintf :: LLVM.Operand
-                 , tableOptions :: CompilerOpts }
+                 , tableOptions :: CompilerOpts
+                 , tableTypeTags :: Map (TypeF Type) LLVM.Operand }
   deriving (Show)
 
 -- | An empty codegen table. This will cause a crash if codegen is run when not
@@ -74,7 +75,8 @@ emptyCodegenTable =
                  , tableFuns = Map.empty
                  , tableJoinValues = Map.empty
                  , tablePrintf = error "printf not set"
-                 , tableOptions = defaultCompilerOpts }
+                 , tableOptions = defaultCompilerOpts
+                 , tableTypeTags = Map.empty }
 
 newtype CodegenT m a =
   CodegenT { unCodegen :: StateT CodegenTable m a }
@@ -119,6 +121,28 @@ lookupValueType :: MonadState CodegenTable m
 lookupValueType = \case
   JVar name -> gets (fst . fromJust . Map.lookup name . tableVars)
   JLit lit -> pure $ literalType lit
+
+-- | If the type tag does not exist, emit it into the IR. Then return the
+-- operand of the type tag.
+lookupTypeTag :: (LLVMIR.MonadModuleBuilder m, MonadState CodegenTable m)
+              => TypeF Type
+              -> m LLVM.Operand
+lookupTypeTag ty =
+  gets (Map.lookup ty . tableTypeTags) >>= \case
+    Just oper -> pure oper
+    Nothing -> do
+      let name = case ty of
+            TyNumber _ -> "Int" -- TODO: fix this
+            TyString -> "String"
+            TyBool -> "Bool"
+            _ -> error "TODO"
+      let llvmTy = typeToLLVM (Fix ty)
+      let nullptr = LLVMC.Null (LLVM.ptr RT.typeTagType)
+      let size = LLVMC.sizeof llvmTy
+      let tagContents = LLVMC.Struct { LLVMC.structName = Nothing
+                                     , LLVMC.isPacked = False
+                                     , LLVMC.memberValues = [size] }
+      LLVMIR.global (LLVM.mkName $ "simpl.tag." ++ name) RT.typeTagType tagContents
 
 bindVariable :: MonadState CodegenTable m
              => Text
@@ -381,20 +405,18 @@ callableCodegen callable args = case callable of
     [jval] -> do
       ty <- lookupValueType jval
       val <- jvalueCodegen jval
-      -- TODO: tag lookup
-      let tag = error "TODO"
+      tag <- lookupTypeTag ty
       bytes <- LLVMIR.bitcast val (LLVM.ptr LLVM.void)
       LLVMIR.call RT.taggedBoxRef [(tag, []), (bytes, [])]
     _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
   CUntag -> case args of
     [jval] -> do
-      ty <- lookupValueType jval
-      let llvmTy = typeToLLVM (Fix ty)
+      ty <- lookupValueType jval >>= \case
+        TyBox t -> pure t
+        _ -> error "callableCodegen: untagging non-boxed type"
       val <- jvalueCodegen jval
-      typeTag <- LLVMIR.call RT.taggedTagRef [(val, [])]
-      len <- LLVMIR.call RT.tagSizeRef [(typeTag, [])]
       bytesPtr <- LLVMIR.call RT.taggedUnboxRef [(val, [])]
-      LLVMIR.bitcast bytesPtr (LLVM.ptr llvmTy)
+      LLVMIR.bitcast bytesPtr (typeToLLVM ty)
     _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
 
 -- | Generates code for a [JExpr]
@@ -462,8 +484,8 @@ typeToLLVM = go . unfix
             , LLVM.argumentTypes = typeToLLVM <$> args
             , LLVM.isVarArg = False
             }
-      TyVar _ -> RT.taggedValueType
-      TyBox _ -> RT.taggedValueType
+      TyVar _ -> LLVM.ptr RT.taggedValueType
+      TyBox _ -> LLVM.ptr RT.taggedValueType
 
 adtToLLVM :: Text
            -> [Constructor]
