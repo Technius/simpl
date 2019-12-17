@@ -406,6 +406,8 @@ callableCodegen callable args = case callable of
       ty <- lookupValueType jval
       val <- jvalueCodegen jval
       tag <- lookupTypeTag ty
+      -- TODO: Box primitive types like int, bool, etc.; should require a malloc
+      -- and store
       bytes <- LLVMIR.bitcast val (LLVM.ptr LLVM.void)
       LLVMIR.call RT.taggedBoxRef [(tag, []), (bytes, [])]
     _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)

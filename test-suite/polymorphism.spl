@@ -2,5 +2,8 @@ fun id (x: a) : a := { x }
 
 fun main : Int := {
     let _ = println(@id("hi")) in
+    let y = 5 in
+    let _ = println(if true then @id("bye") else "sigh") in
+#    let _ = println(if @id(y) <= 0 then @id("bye") else "sigh") in
     0
 }

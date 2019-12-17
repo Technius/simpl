@@ -28,8 +28,6 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 
-import Debug.Trace
-
 import Simpl.Annotation
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
@@ -189,19 +187,28 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.Var name -> cont (J.JVar name)
   A.Let name bindExpr next ->
     anfTransform bindExpr $ \bindVal ->
-      makeJexpr (getType (unfix bindExpr)) . J.JLet name bindVal <$>
+      makeJexpr ty . J.JLet name bindVal <$>
         local (insertVar name ty) (anfTransform next cont)
   A.BinOp op left right ->
     anfTransform left $ \jleft ->
       anfTransform right $ \jright -> do
+        jlTy <- getJvalueType jleft
+        jrTy <- getJvalueType jright
+        (jl, boxlConv) <- rebindBoxing jleft jlTy Unboxed
+        (jr, boxrConv) <- rebindBoxing jright jrTy Unboxed
+        let boxConv = boxlConv . boxrConv
         name <- freshVar
-        makeJexpr ty . J.JApp name (J.CBinOp op) [jleft, jright] <$>
+        boxConv . makeJexpr ty . J.JApp name (J.CBinOp op) [jl, jr] <$>
           local (insertVar name ty) (cont (J.JVar name))
   A.If guard trueBr falseBr ->
     anfTransform guard $ \jguard -> do
       lbl <- freshLabel
-      trueBr'  <- anfTransform trueBr (pure . makeJexpr (astType trueBr) . J.JVal)
-      falseBr' <- anfTransform falseBr (pure . makeJexpr (astType falseBr) . J.JVal)
+      let transformBr br = anfTransform br $ \result -> do
+            rTy <- getJvalueType result
+            (result', boxConv) <- rebindBoxing result rTy (boxedVal ty)
+            pure . boxConv . makeJexpr (astType br) . J.JVal $ result'
+      trueBr'  <- transformBr trueBr
+      falseBr' <- transformBr falseBr
       name <- freshVar
       let jmp = J.JJump lbl
       let guardTy = getType (unfix guard)
@@ -241,7 +248,9 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.Cast expr numTy ->
     anfTransform expr $ \jexpr -> do
       varName <- freshVar
-      makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr] <$>
+      valTy <- getJvalueType jexpr
+      (jexpr', boxConv) <- rebindBoxing jexpr valTy Unboxed
+      boxConv . makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr'] <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.Print expr ->
     anfTransform expr $ \jval -> do
