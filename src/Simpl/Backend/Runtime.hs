@@ -64,8 +64,8 @@ mallocType = mkFunType [("ptr", LLVM.i64)] (LLVM.ptr LLVM.i8)
 memcpyType = mkFunType [ ("dest", LLVM.ptr LLVM.i8)
                        , ("src", LLVM.ptr LLVM.i8)
                        , ("len", LLVM.i64) ]
-                       LLVM.void
-printfType = ([("", LLVM.ptr LLVM.i8)], LLVM.void, True)
+                       LLVM.i8
+printfType = ([("", LLVM.ptr LLVM.i8)], LLVM.i8, True)
 
 mallocRef, memcpyRef, printfRef :: LLVM.Operand
 mallocRef = runtimeFunRef "simpl_malloc" mallocType
@@ -111,8 +111,8 @@ taggedValueType = runtimeStruct "simpl_tagged_value"
 tagSizeType, taggedTagType, taggedBoxType, taggedUnboxType :: FunType
 tagSizeType = mkFunType [("t", LLVM.ptr typeTagType)] LLVM.i64
 taggedTagType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr taggedValueType)
-taggedBoxType = mkFunType [("t", LLVM.ptr typeTagType), ("d", LLVM.ptr LLVM.void)] (LLVM.ptr taggedValueType)
-taggedUnboxType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr LLVM.void)
+taggedBoxType = mkFunType [("t", LLVM.ptr typeTagType), ("d", LLVM.ptr LLVM.i8)] (LLVM.ptr taggedValueType)
+taggedUnboxType = mkFunType [("t", LLVM.ptr taggedValueType)] (LLVM.ptr LLVM.i8)
 
 tagSizeRef, taggedTagRef, taggedBoxRef, taggedUnboxRef :: LLVM.Operand
 tagSizeRef = runtimeFunRef "simpl_tag_size" tagSizeType

@@ -135,7 +135,8 @@ lookupTypeTag ty =
             TyNumber _ -> "Int" -- TODO: fix this
             TyString -> "String"
             TyBool -> "Bool"
-            _ -> error "TODO"
+            TyAdt n _ -> "data." <> n
+            x -> error ("TODO: handle tag type lookup for " ++ show x)
       let llvmTy = typeToLLVM (Fix ty)
       let size = LLVMC.sizeof llvmTy
       let tagContents = LLVMC.Struct { LLVMC.structName = Nothing
@@ -145,6 +146,14 @@ lookupTypeTag ty =
       oper <- LLVMIR.global lname RT.typeTagType tagContents
       modify (\t -> t { tableTypeTags = Map.insert ty oper (tableTypeTags t) })
       pure oper
+
+-- | Whether a type is represented using a pointer
+typeRepIsPtr :: TypeF Type -> Bool
+typeRepIsPtr = \case
+  TyNumber _ -> False
+  TyBool -> False
+  TyAdt _ _ -> False
+  _ -> True
 
 bindVariable :: MonadState CodegenTable m
              => Text
@@ -406,11 +415,17 @@ callableCodegen callable args = case callable of
   CTag -> case args of
     [jval] -> do
       ty <- lookupValueType jval
-      val <- jvalueCodegen jval
       tag <- lookupTypeTag ty
-      -- TODO: Box primitive types like int, bool, etc.; should require a malloc
-      -- and store
-      bytes <- LLVMIR.bitcast val (LLVM.ptr LLVM.void)
+      let llvmTy = typeToLLVM (Fix ty)
+      let size = LLVM.ConstantOperand (LLVMC.ZExt (LLVMC.sizeof llvmTy) LLVM.i64)
+      -- We only need to allocate if the value is not a pointer
+      val <- jvalueCodegen jval
+      bytes <- if typeRepIsPtr ty
+               then LLVMIR.bitcast val (LLVM.ptr LLVM.i8)
+               else do b <- LLVMIR.call RT.mallocRef [(size, [])]
+                       allocRef <- LLVMIR.bitcast b (LLVM.ptr llvmTy)
+                       LLVMIR.store allocRef 0 val
+                       pure b
       LLVMIR.call RT.taggedBoxRef [(tag, []), (bytes, [])]
     _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
   CUntag -> case args of
@@ -420,7 +435,12 @@ callableCodegen callable args = case callable of
         _ -> error "callableCodegen: untagging non-boxed type"
       val <- jvalueCodegen jval
       bytesPtr <- LLVMIR.call RT.taggedUnboxRef [(val, [])]
-      LLVMIR.bitcast bytesPtr (typeToLLVM ty)
+      let llvmTy = typeToLLVM ty
+      -- Need to unbox if the stored type is not a pointer
+      if typeRepIsPtr (unfix ty)
+        then LLVMIR.bitcast bytesPtr llvmTy
+        else do ptr <- LLVMIR.bitcast bytesPtr (LLVM.ptr llvmTy)
+                LLVMIR.load ptr 0
     _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
 
 -- | Generates code for a [JExpr]
