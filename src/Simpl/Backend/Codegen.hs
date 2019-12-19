@@ -308,7 +308,9 @@ controlFlowCodegen val valOper = \case
         let labelName = "case_" <> fromString (Text.unpack name) in
         (name, ) <$> LLVMIR.freshName labelName
     -- Assume the symbol table and type information is correct
-    dataName <- (\case { TyAdt n _ -> n; _ -> error "" }) <$> lookupValueType val
+    dataName <- flip fmap (lookupValueType val) $ \case
+      TyAdt n _ -> n
+      t -> error $ "controlFlowCodegen: Unexpected case value type: " ++ show t ++ " " ++ show val
     ctors <- gets ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
     let ctorNames = ctorGetName <$> ctors
     let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
@@ -321,23 +323,23 @@ controlFlowCodegen val valOper = \case
       let cf = branchGetControlFlow br
       (_, ctorLLVMName, index) <- gets (fromJust . Map.lookup ctorName . tableCtors)
       let Ctor _ argTys = ctors !! index
-      let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
+      let bindingPairs = branchGetBindings br `zip` argTys
       LLVMIR.emitBlockStart label
       ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
       let ctorPtrOffset = LLVMIR.int32 0
-      bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, llvmTy)) -> do
+      bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, ty)) -> do
         let ctorPtrIndex = LLVMIR.int32 i
         -- Need to bitcast the ptr type because we need a concrete type. We
         -- also need to load the data immediately because of how variables
         -- are implemented.
         v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
-             >>= flip LLVMIR.bitcast (LLVM.ptr llvmTy)
+             >>= flip LLVMIR.bitcast (LLVM.ptr (typeToLLVM ty))
              >>= flip LLVMIR.load 0
-        ty <- lookupValueType (JVar n)
-        pure (n, (ty, v))
+        pure (n, (unfix ty, v))
       let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
-      (exprVal, exprOper) <- jexprCodegen expr
-      localCodegenTable updateTable (controlFlowCodegen exprVal exprOper cf)
+      localCodegenTable updateTable $ do
+        (exprVal, exprOper) <- jexprCodegen expr
+        controlFlowCodegen exprVal exprOper cf
     LLVMIR.emitBlockStart defLabel
     LLVMIR.unreachable
   JJump lbl -> do
@@ -432,7 +434,7 @@ callableCodegen callable args = case callable of
     [jval] -> do
       ty <- lookupValueType jval >>= \case
         TyBox t -> pure t
-        _ -> error "callableCodegen: untagging non-boxed type"
+        t -> error $ "callableCodegen: untagging non-boxed type " ++ show t
       val <- jvalueCodegen jval
       bytesPtr <- LLVMIR.call RT.taggedUnboxRef [(val, [])]
       let llvmTy = typeToLLVM ty

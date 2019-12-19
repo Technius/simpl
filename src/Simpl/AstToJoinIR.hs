@@ -205,8 +205,9 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.Lit lit -> cont (J.JLit lit)
   A.Var name -> cont (J.JVar name)
   A.Let name bindExpr next ->
-    anfTransform bindExpr $ \bindVal ->
-      makeJexpr ty . J.JLet name bindVal <$>
+    anfTransform bindExpr $ \bindVal -> do
+      bindTy <- getJvalueType bindVal
+      makeJexpr bindTy . J.JLet name bindVal <$>
         local (insertVar name ty) (anfTransform next cont)
   A.BinOp op left right ->
     anfTransform left $ \jleft ->
