@@ -20,6 +20,8 @@ module Simpl.AstToJoinIR
 import Control.Monad.Reader hiding (guard)
 import Data.Functor.Foldable (Fix(..), unfix)
 import Data.Functor.Identity
+import Data.Foldable (fold)
+import Data.Monoid (Endo(..), appEndo)
 import Data.Text (Text)
 import Data.String (fromString)
 import Data.Maybe (fromJust)
@@ -188,7 +190,9 @@ transformBranch :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshV
                 -> A.Branch (A.AnnExpr flds) -- ^ Branches
                 -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
 transformBranch cf boxVal (A.BrAdt adtName argNames expr) = do
-  jexpr <- anfTransform expr $ withRebindBoxing boxVal J.JVal
+  (_, A.Ctor _ argTys, _) <- asks (fromJust . symTabLookupCtor adtName . tcSymTab)
+  let withScope ctx = foldr (uncurry insertVar) ctx (argNames `zip` argTys)
+  jexpr <- local withScope $ anfTransform expr $ withRebindBoxing boxVal J.JVal
   pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
 
 
@@ -247,9 +251,15 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
         local (insertVar name ty) (cont (J.JVar name))
   A.Cons ctorName args ->
     collectArgs args $ \argVals -> do
-      -- TODO: find and box polymorphic args
+      (_, A.Ctor _ ctorTyArgs, _) <- asks (fromJust . symTabLookupCtor ctorName . tcSymTab)
+      -- Box each argument as needed
+      pairs <- forM (argVals `zip` ctorTyArgs) $ \(jv, cty) -> do
+        jty <- getJvalueType jv
+        rebindBoxing jv jty (boxedVal cty)
+      let (argVals', boxConvs) = unzip pairs
+      let boxConv = appEndo (fold (fmap Endo boxConvs))
       varName <- freshVar
-      makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals <$>
+      boxConv . makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals' <$>
         local (insertVar varName ty) (cont (J.JVar varName))
   A.App funcName args ->
     collectArgs args $ \argVals -> do
@@ -259,7 +269,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
       tuples <- sequence [rebindBoxing val aTy (boxedVal faTy)
                          | (((_, faTy), val), aTy) <- funcArgs `zip` argVals `zip` argTys]
       let (argVals', boxConvArgs_) = unzip tuples
-      let boxConvArgs = foldl (.) id boxConvArgs_
+      let boxConvArgs = appEndo (fold (fmap Endo boxConvArgs_))
       let ty' = if isBoxed funcRetTy then Fix (TyBox ty) else ty
       boxConvArgs . makeJexpr ty' . J.JApp varName (J.CFunc funcName) argVals' <$>
         local (insertVar varName ty') (cont (J.JVar varName))

@@ -1,0 +1,8 @@
+data Maybe a = { Just a | Nothing }
+
+fun main : Int := {
+  let foo = Just 5 in # 0
+  case foo of
+    Just x => let _ = println("Just OK") in x
+    Nothing => let _ = println("ERROR: Got Nothing") in 0
+}

@@ -16,7 +16,7 @@ import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
 import Data.Maybe (fromMaybe)
-import Data.Foldable (traverse_, asum)
+import Data.Foldable (asum)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
@@ -112,13 +112,20 @@ inferType = cata $ \ae -> case annGetExpr ae of
     let argTys = extractTy <$> args
     ctorRes <- asks (symTabLookupCtor name)
     case ctorRes of
-      Just (adtTy, Ctor _ ctorArgTys, _) -> do
-        let conArgs = typeToUtype <$> ctorArgTys
-        let numConArgs = length conArgs
+      Just (Fix (TyAdt adtName tparamTys), Ctor _ ctorArgTys, _) -> do
+        let numConArgs = length ctorArgTys
         when (numConArgs /= length argTys) $
           throwError $ TyErrArgCount numConArgs (length argTys) ctorArgTys
-        traverse_ (uncurry unifyTy) (zip conArgs argTys)
-        pure $ annotate (Cons name args) (annGetAnn ae) (typeToUtype adtTy)
+        -- Instantiate type variables
+        let tparams = flip fmap tparamTys $ \t -> case unfix t of
+              TyVar n -> n
+              _ -> error "Symbol table ADT types should only contain variables"
+        substMap <- instantiateVars (Set.fromList tparams)
+        let conArgs = substituteUVars substMap . typeToUtype <$> ctorArgTys
+        argTys' <- traverse (uncurry unifyTy) (zip conArgs argTys)
+        let newTy = UTerm (TyAdt adtName argTys')
+        pure $ annotate (Cons name args) (annGetAnn ae) newTy
+      Just ty -> error $ "Symbol table contained ADT with invalid type: " ++ show ty
       Nothing -> throwError $ TyErrNoSuchCtor name
   Case branchMs valM -> do
     val <- valM
@@ -126,22 +133,36 @@ inferType = cata $ \ae -> case annGetExpr ae of
     branches <- forM branchMs $ \case
       BrAdt ctorName bindings exprM ->
         asks (symTabLookupCtor ctorName) >>= \case
-          Just (dataTy, Ctor _ ctorArgs, _) -> do
+          Just (dataTy@(Fix (TyAdt _ tparamTys)), Ctor _ ctorArgs, _) -> do
             when (length bindings /= length ctorArgs) $
               throwError $ TyErrArgCount (length ctorArgs) (length bindings) ctorArgs
-            _ <- unifyTy valTy (typeToUtype dataTy)
-            let updatedBinds = Map.fromList (bindings `zip` ctorArgs)
+            -- Instantiate type variables
+            let tparams = flip fmap tparamTys $ \t -> case unfix t of
+                  TyVar n -> n
+                  _ -> error "Symbol table ADT types should only contain variables"
+            substMap <- instantiateVars (Set.fromList tparams)
+            _ <- unifyTy valTy (substituteUVars substMap (typeToUtype dataTy))
+            let substCtorArgs = substituteUVars substMap . typeToUtype <$> ctorArgs
+            -- Same hack as in let binding
+            instCtorArgs <- forM substCtorArgs $ \t -> do
+              t' <- utypeToType <$> forceBindings t
+              case t' of
+                Just t'' -> pure t''
+                Nothing -> throwError $ TyErrAmbiguousType t
+            let updatedBinds = Map.fromList (bindings `zip` instCtorArgs)
             -- Infer result type with ctor args bound
             expr <- local (\t -> t { symTabVars = Map.union (symTabVars t) updatedBinds }) exprM
             pure $ BrAdt ctorName bindings expr
+          Just ty -> error $ "Symbol table contained ADT with invalid type: " ++ show ty
           Nothing -> throwError $ TyErrNoSuchCtor ctorName
     let brTys = extractTy . branchGetExpr <$> branches
     resTy <- mkMetaVar
     annotate (Case branches val) (annGetAnn ae) <$> foldM unifyTy resTy brTys
   Let name valM nextM -> do
     val <- valM
+    valTy <- forceBindings (extractTy val)
     -- TODO: Hack, fix this
-    case utypeToType (extractTy val) of
+    case utypeToType valTy of
       Just ty -> do
         next <- local (symTabInsertVar name ty) nextM
         pure $ annotate (Let name val next) (annGetAnn ae) (extractTy next)
@@ -174,11 +195,12 @@ inferType = cata $ \ae -> case annGetExpr ae of
     pure $ annotate (App name params') (annGetAnn ae) resTy
   FunRef name ->
     asks (symTabLookupStaticFun name) >>= \case
-      Just (tvars, params, ty, _) ->
-        -- TODO: How to handle polymorphic function?
-        let paramTys = snd <$> params
-            funTy = typeToUtype (Fix $ TyFun paramTys ty) in
-          pure $ annotate (FunRef name) (annGetAnn ae) funTy
+      Just (tvars, params, ty, _) -> do
+        substMap <- instantiateVars tvars
+        let paramTys = substituteUVars substMap . typeToUtype . snd <$> params
+        let resTy = substituteUVars substMap (typeToUtype ty)
+        let funTy = substituteUVars substMap (UTerm (TyFun paramTys resTy))
+        pure $ annotate (FunRef name) (annGetAnn ae) funTy
       Nothing -> throwError $ TyErrNoSuchVar name
   Cast exprM num -> do
     expr <- exprM
