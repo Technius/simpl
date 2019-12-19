@@ -32,7 +32,7 @@ import Simpl.Annotation
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
-import Simpl.Type (Type, TypeF(TyBox, TyVar))
+import Simpl.Type (Type, TypeF(TyBox, TyVar, TyAdt), substituteTypeVars, typeRepIsPtr)
 import Simpl.Typecheck (literalType)
 import Simpl.Util.Supply
 import qualified Simpl.Util.Stream as Stream
@@ -184,14 +184,26 @@ transformExpr expr boxVal = anfTransform expr $ withRebindBoxing boxVal J.JVal
 -- | Perform ANF transformation on the branch, afterwards handling control flow.
 transformBranch :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
                 => J.ControlFlow (J.AnnExpr '[ 'ExprType]) -- ^ Control flow handler
+                -> Type -- ^ Type of guard expression
                 -> BoxedVal -- ^ Whether branch is expected to be boxed
                 -> A.Branch (A.AnnExpr flds) -- ^ Branches
                 -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
-transformBranch cf boxVal (A.BrAdt adtName argNames expr) = do
-  (_, A.Ctor _ argTys, _) <- asks (fromJust . symTabLookupCtor adtName . tcSymTab)
+transformBranch cf guardTy boxVal (A.BrAdt ctorName argNames expr) = do
+  (_, A.Ctor _ argTys, _) <- asks (fromJust . symTabLookupCtor ctorName . tcSymTab)
   let withScope ctx = foldr (uncurry insertVar) ctx (argNames `zip` argTys)
   jexpr <- local withScope $ anfTransform expr $ withRebindBoxing boxVal J.JVal
-  pure $ J.BrAdt adtName argNames (J.Cfe jexpr cf)
+  argTys' <- case unfix guardTy of
+     TyAdt name tvars -> do
+       (tvars', _) <- asks (fromJust . symTabLookupAdt name . tcSymTab)
+       let tvarMapping = Map.fromList (tvars' `zip` tvars)
+       pure $ flip fmap argTys $ \t -> case unfix t of
+         TyVar _ ->
+           let t' = substituteTypeVars tvarMapping t in
+             if t' == t || typeRepIsPtr (unfix t')
+             then t' else Fix (TyBox t')
+         _ -> substituteTypeVars tvarMapping t
+     _ -> pure argTys
+  pure $ J.BrAdt ctorName (argNames `zip` argTys') (J.Cfe jexpr cf)
 
 
 -- | Main ANF transformation logic. Given the SimPL AST, this function will
@@ -208,7 +220,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
     anfTransform bindExpr $ \bindVal -> do
       bindTy <- getJvalueType bindVal
       makeJexpr bindTy . J.JLet name bindVal <$>
-        local (insertVar name ty) (anfTransform next cont)
+        local (insertVar name bindTy) (anfTransform next cont)
   A.BinOp op left right ->
     anfTransform left $ \jleft ->
       anfTransform right $ \jright ->
@@ -241,7 +253,7 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
         jTy <- getJvalueType jexpr'
         -- Transform branches
         lbl <- freshLabel
-        jbranches <- traverse (transformBranch (J.JJump lbl) (boxedVal ty)) branches
+        jbranches <- traverse (transformBranch (J.JJump lbl) jTy (boxedVal ty)) branches
         let jexprCfe = J.Cfe (makeJexpr jTy (J.JVal jexpr')) (J.JCase jbranches)
         name <- freshVar
         -- TODO: Make JJoin node placement more efficient

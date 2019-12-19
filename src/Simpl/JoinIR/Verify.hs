@@ -142,5 +142,5 @@ doVerifyBranch :: (MonadError VerifyError m, MonadReader VerifyCtx m)
                -> m ()
 doVerifyBranch (BrAdt name args cfe) = do
   checkUnboundVar name
-  _ <- traverse checkUnboundVar args
+  _ <- traverse checkUnboundVar (fst <$> args)
   doVerifyCfe cfe

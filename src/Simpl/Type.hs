@@ -16,6 +16,8 @@ import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
 import Data.Eq.Deriving (deriveEq1)
 import Data.Ord.Deriving (deriveOrd1)
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Text.Show.Deriving (deriveShow1)
@@ -78,6 +80,14 @@ isComplexType = \case
   TyFun _ _ -> True
   _ -> False
 
+-- | Whether a type is represented using a pointer
+typeRepIsPtr :: TypeF Type -> Bool
+typeRepIsPtr = \case
+  TyNumber _ -> False
+  TyBool -> False
+  TyAdt _ _ -> False
+  _ -> True
+
 functionTypeResult :: Type -> Type
 functionTypeResult (Fix ty) = case ty of
   TyFun _ res -> functionTypeResult res
@@ -93,6 +103,12 @@ getTypeVars = cata $ \case
   TyAdt _ vargs -> Set.unions vargs
   TyBox vs -> vs
 
+substituteTypeVars :: Map Text Type -> Type -> Type
+substituteTypeVars vars = cata go
+  where
+    go = \case
+      ty@(TyVar n) -> Map.findWithDefault (Fix ty) n vars
+      ty -> Fix ty
 
 instance Pretty Type where
   pretty = para go

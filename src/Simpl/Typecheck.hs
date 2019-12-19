@@ -112,20 +112,16 @@ inferType = cata $ \ae -> case annGetExpr ae of
     let argTys = extractTy <$> args
     ctorRes <- asks (symTabLookupCtor name)
     case ctorRes of
-      Just (Fix (TyAdt adtName tparamTys), Ctor _ ctorArgTys, _) -> do
+      Just ((adtName, tvars), Ctor _ ctorArgTys, _) -> do
         let numConArgs = length ctorArgTys
         when (numConArgs /= length argTys) $
           throwError $ TyErrArgCount numConArgs (length argTys) ctorArgTys
         -- Instantiate type variables
-        let tparams = flip fmap tparamTys $ \t -> case unfix t of
-              TyVar n -> n
-              _ -> error "Symbol table ADT types should only contain variables"
-        substMap <- instantiateVars (Set.fromList tparams)
+        substMap <- instantiateVars (Set.fromList tvars)
         let conArgs = substituteUVars substMap . typeToUtype <$> ctorArgTys
         argTys' <- traverse (uncurry unifyTy) (zip conArgs argTys)
         let newTy = UTerm (TyAdt adtName argTys')
         pure $ annotate (Cons name args) (annGetAnn ae) newTy
-      Just ty -> error $ "Symbol table contained ADT with invalid type: " ++ show ty
       Nothing -> throwError $ TyErrNoSuchCtor name
   Case branchMs valM -> do
     val <- valM
@@ -133,17 +129,15 @@ inferType = cata $ \ae -> case annGetExpr ae of
     branches <- forM branchMs $ \case
       BrAdt ctorName bindings exprM ->
         asks (symTabLookupCtor ctorName) >>= \case
-          Just (dataTy@(Fix (TyAdt _ tparamTys)), Ctor _ ctorArgs, _) -> do
+          Just ((adtName, tvars), Ctor _ ctorArgs, _) -> do
             when (length bindings /= length ctorArgs) $
               throwError $ TyErrArgCount (length ctorArgs) (length bindings) ctorArgs
             -- Instantiate type variables
-            let tparams = flip fmap tparamTys $ \t -> case unfix t of
-                  TyVar n -> n
-                  _ -> error "Symbol table ADT types should only contain variables"
-            substMap <- instantiateVars (Set.fromList tparams)
+            substMap <- instantiateVars (Set.fromList tvars)
+            let dataTy = Fix (TyAdt adtName (Fix . TyVar <$> tvars))
             _ <- unifyTy valTy (substituteUVars substMap (typeToUtype dataTy))
             let substCtorArgs = substituteUVars substMap . typeToUtype <$> ctorArgs
-            -- Same hack as in let binding
+            -- TODO: Same hack as in let binding
             instCtorArgs <- forM substCtorArgs $ \t -> do
               t' <- utypeToType <$> forceBindings t
               case t' of
@@ -153,7 +147,6 @@ inferType = cata $ \ae -> case annGetExpr ae of
             -- Infer result type with ctor args bound
             expr <- local (\t -> t { symTabVars = Map.union (symTabVars t) updatedBinds }) exprM
             pure $ BrAdt ctorName bindings expr
-          Just ty -> error $ "Symbol table contained ADT with invalid type: " ++ show ty
           Nothing -> throwError $ TyErrNoSuchCtor ctorName
     let brTys = extractTy . branchGetExpr <$> branches
     resTy <- mkMetaVar

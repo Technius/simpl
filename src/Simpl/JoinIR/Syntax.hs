@@ -23,7 +23,7 @@ import Data.Text.Prettyprint.Doc (Pretty, pretty, (<>), (<+>))
 import qualified Data.Text.Prettyprint.Doc as PP
 import qualified Simpl.Annotation as Ann
 import Simpl.Ast (BinaryOp(..), Literal(..))
-import Simpl.Type (Numeric(..))
+import Simpl.Type (Numeric(..), Type)
 import Text.Show.Deriving (deriveShow1)
 import Data.Functor.Foldable
 
@@ -66,14 +66,14 @@ data ControlFlow a
 
 
 data JBranch a
-  = BrAdt Name [Name] !(Cfe a) -- ^ Destructure algebraic data type
+  = BrAdt Name [(Name, Type)] !(Cfe a) -- ^ Destructure algebraic data type
   deriving (Functor, Foldable, Traversable, Show)
 
 branchGetExpr :: JBranch a -> a
 branchGetExpr = \case
   BrAdt _ _ (Cfe e _) -> e
 
-branchGetBindings :: JBranch a -> [Text]
+branchGetBindings :: JBranch a -> [(Text, Type)]
 branchGetBindings = \case
   BrAdt _ vars _ -> vars
 
@@ -135,9 +135,11 @@ instance Pretty JValue where
     JLit l -> pretty l
 
 instance Pretty a => Pretty (JBranch a) where
-  pretty (BrAdt ctorName varNames cfe) =
-    PP.hang 2 $ PP.hsep (pretty <$> brPart) <> PP.softline <> pretty cfe
-    where brPart = [ctorName] ++ varNames ++ ["=>"]
+  pretty (BrAdt ctorName varPairs cfe) =
+    PP.hang 2 $ PP.hsep brPart <> PP.softline <> pretty cfe
+    where
+      vars = (\(n, t) -> PP.parens (pretty n <+> ":" <+> pretty t)) <$> varPairs
+      brPart = [pretty ctorName] ++ vars ++ [pretty ("=>" :: Text)]
 
 instance Pretty a => Pretty (ControlFlow a) where
   pretty = \case

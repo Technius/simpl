@@ -48,7 +48,7 @@ import Simpl.Annotation hiding (AnnExpr, AnnExprF)
 import Simpl.Ast (BinaryOp(..), Constructor(..), Literal(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Type (Type(..), TypeF(..), Numeric(..))
+import Simpl.Type (Type, TypeF(..), Numeric(..), typeRepIsPtr)
 import Simpl.Typecheck (literalType)
 import Simpl.Backend.Runtime ()
 import Simpl.JoinIR.Syntax
@@ -57,7 +57,7 @@ import qualified Simpl.Backend.Runtime as RT
 data CodegenTable =
   MkCodegenTable { tableVars :: Map Text (TypeF Type, LLVM.Operand) -- ^ Pointer to variables
                  , tableCtors :: Map Text (LLVM.Name, LLVM.Name, Int) -- ^ Data type name, ctor name, index
-                 , tableAdts :: Map Text (LLVM.Name, Type, [Constructor])
+                 , tableAdts :: Map Text (LLVM.Name, [Text], [Constructor])
                  , tableFuns :: Map Text LLVM.Operand
                  , tableJoinValues :: Map Text (LLVM.Name, [(LLVM.Operand, LLVM.Name)])
                  , tablePrintf :: LLVM.Operand
@@ -146,14 +146,6 @@ lookupTypeTag ty =
       oper <- LLVMIR.global lname RT.typeTagType tagContents
       modify (\t -> t { tableTypeTags = Map.insert ty oper (tableTypeTags t) })
       pure oper
-
--- | Whether a type is represented using a pointer
-typeRepIsPtr :: TypeF Type -> Bool
-typeRepIsPtr = \case
-  TyNumber _ -> False
-  TyBool -> False
-  TyAdt _ _ -> False
-  _ -> True
 
 bindVariable :: MonadState CodegenTable m
              => Text
@@ -321,9 +313,8 @@ controlFlowCodegen val valOper = \case
     forM_ (usedLabelTriples `zip` branches) $ \((_, (ctorName, label)), br) -> do
       let expr = branchGetExpr br
       let cf = branchGetControlFlow br
-      (_, ctorLLVMName, index) <- gets (fromJust . Map.lookup ctorName . tableCtors)
-      let Ctor _ argTys = ctors !! index
-      let bindingPairs = branchGetBindings br `zip` argTys
+      (_, ctorLLVMName, _) <- gets (fromJust . Map.lookup ctorName . tableCtors)
+      let bindingPairs = branchGetBindings br
       LLVMIR.emitBlockStart label
       ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
       let ctorPtrOffset = LLVMIR.int32 0
@@ -584,7 +575,7 @@ moduleCodegen srcCode symTab = mdo
   -- definition doesn't matter. This works because the codegen monad is lazy.
   modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })
   -- TODO: Care about type variables
-  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (tvars, params, ty, body)) ->
+  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (_, params, ty, body)) ->
     (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
