@@ -119,7 +119,7 @@ instance Pretty Type where
       go (TyNumber n) = pretty n
       go TyBool = "Bool"
       go TyString = "String"
-      go (TyAdt n tparams) = pretty n <> hsep (snd <$> tparams)
+      go (TyAdt n tparams) = hsep (pretty n : (snd <$> tparams))
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
       go (TyVar n) = pretty n
