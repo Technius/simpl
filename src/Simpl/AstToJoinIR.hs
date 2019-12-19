@@ -20,8 +20,6 @@ module Simpl.AstToJoinIR
 import Control.Monad.Reader hiding (guard)
 import Data.Functor.Foldable (Fix(..), unfix)
 import Data.Functor.Identity
-import Data.Foldable (fold)
-import Data.Monoid (Endo(..), appEndo)
 import Data.Text (Text)
 import Data.String (fromString)
 import Data.Maybe (fromJust)
@@ -140,17 +138,18 @@ boxedVal t = if isBoxed t then Boxed else Unboxed
 
 rebindBoxing :: (HasType flds, MonadFreshVar m, MonadReader (TransformCtx flds) m)
              => J.JValue     -- ^ Variable name
-             -> Type     -- ^ Variable type
              -> BoxedVal -- ^ Whether to ensure boxed or unboxed
-             -> m (J.JValue, J.AnnExpr '[ 'ExprType] -> J.AnnExpr '[ 'ExprType])
-rebindBoxing val ty b = do
+             -> (J.JValue -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
+             -> m (J.AnnExpr '[ 'ExprType])
+rebindBoxing val b cont = do
+  ty <- getJvalueType val
   let create ty' action = do
         name <- case val of { J.JVar n -> pure n; _ -> freshVar }
-        local (insertVar name ty') (pure (J.JVar name, makeJexpr ty' . J.JApp name action [val]))
+        makeJexpr ty' . J.JApp name action [val] <$> local (insertVar name ty')(cont (J.JVar name))
   case (boxedType ty, b) of
     (Right ty', Unboxed) -> create ty' J.CUntag
     (Left ty', Boxed) -> create (Fix (TyBox ty')) J.CTag
-    _ -> pure (val, id)
+    _ -> cont val
 
 -- | If needed, rebinds the given value to match the boxing target.
 withRebindBoxing :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
@@ -158,11 +157,10 @@ withRebindBoxing :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFresh
                  -> (J.JValue -> J.JExprF (J.AnnExpr '[ 'ExprType]))
                  -> J.JValue -- ^Expression value
                  -> m (J.AnnExpr '[ 'ExprType])
-withRebindBoxing boxVal f val = do
-  ty <- getJvalueType val
-  (val', boxConv) <- rebindBoxing val ty boxVal
-  ty' <- getJvalueType val'
-  pure . boxConv . makeJexpr ty' . f $ val'
+withRebindBoxing boxVal f val =
+  rebindBoxing val boxVal $ \val' -> do
+    ty <- getJvalueType val'
+    pure . makeJexpr ty . f $ val'
 
 -- * ANF Transformation
 
@@ -212,87 +210,87 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
         local (insertVar name ty) (anfTransform next cont)
   A.BinOp op left right ->
     anfTransform left $ \jleft ->
-      anfTransform right $ \jright -> do
-        jlTy <- getJvalueType jleft
-        jrTy <- getJvalueType jright
-        (jl, boxlConv) <- rebindBoxing jleft jlTy Unboxed
-        (jr, boxrConv) <- rebindBoxing jright jrTy Unboxed
-        let boxConv = boxlConv . boxrConv
-        name <- freshVar
-        boxConv . makeJexpr ty . J.JApp name (J.CBinOp op) [jl, jr] <$>
-          local (insertVar name ty) (cont (J.JVar name))
+      anfTransform right $ \jright ->
+        rebindBoxing jleft Unboxed $ \jl ->
+          rebindBoxing jright Unboxed $ \jr -> do
+            name <- freshVar
+            makeJexpr ty . J.JApp name (J.CBinOp op) [jl, jr] <$>
+              local (insertVar name ty) (cont (J.JVar name))
   A.If guard trueBr falseBr ->
-    anfTransform guard $ \jguard -> do
+    anfTransform guard $ \jguard ->
       -- Guard must be unboxed to compare for truthiness
-      guardTy <- getJvalueType jguard
-      (jguard', boxConv) <- rebindBoxing jguard guardTy Unboxed
-      let guardCfe = boxConv (makeJexpr guardTy (J.JVal jguard'))
-      -- Handle branches
-      let transformBr br = anfTransform br $ withRebindBoxing (boxedVal ty) J.JVal
-      trueBr'  <- transformBr trueBr
-      falseBr' <- transformBr falseBr
-      lbl <- freshLabel
-      let jmp = J.JJump lbl
-      let cfe = J.Cfe guardCfe (J.JIf (J.Cfe trueBr' jmp) (J.Cfe falseBr' jmp))
-      -- TODO: Make JJoin node placement more efficient
-      name <- freshVar
-      makeJexpr ty . J.JJoin lbl name cfe <$>
-        local (insertVar name ty) (cont (J.JVar name))
+      rebindBoxing jguard Unboxed $ \jguard' -> do
+        guardTy <- getJvalueType jguard'
+        let guardCfe = makeJexpr guardTy (J.JVal jguard')
+        -- Handle branches
+        let transformBr br = anfTransform br $ withRebindBoxing (boxedVal ty) J.JVal
+        trueBr'  <- transformBr trueBr
+        falseBr' <- transformBr falseBr
+        lbl <- freshLabel
+        let jmp = J.JJump lbl
+        let cfe = J.Cfe guardCfe (J.JIf (J.Cfe trueBr' jmp) (J.Cfe falseBr' jmp))
+        -- TODO: Make JJoin node placement more efficient
+        name <- freshVar
+        makeJexpr ty . J.JJoin lbl name cfe <$>
+          local (insertVar name ty) (cont (J.JVar name))
   A.Case branches expr ->
-    anfTransform expr $ \jexpr -> do
+    anfTransform expr $ \jexpr ->
       -- Case value must be unboxed
-      jexpr' <- withRebindBoxing Unboxed J.JVal jexpr
-      lbl <- freshLabel
-      jbranches <- traverse (transformBranch (J.JJump lbl) (boxedVal ty)) branches
-      let jexprCfe = J.Cfe jexpr' (J.JCase jbranches)
-      name <- freshVar
-      -- TODO: Make JJoin node placement more efficient
-      makeJexpr ty . J.JJoin lbl name jexprCfe <$>
-        local (insertVar name ty) (cont (J.JVar name))
+      rebindBoxing jexpr Unboxed $ \jexpr' -> do
+        jTy <- getJvalueType jexpr'
+        -- Transform branches
+        lbl <- freshLabel
+        jbranches <- traverse (transformBranch (J.JJump lbl) (boxedVal ty)) branches
+        let jexprCfe = J.Cfe (makeJexpr jTy (J.JVal jexpr')) (J.JCase jbranches)
+        name <- freshVar
+        -- TODO: Make JJoin node placement more efficient
+        makeJexpr ty . J.JJoin lbl name jexprCfe <$>
+          local (insertVar name ty) (cont (J.JVar name))
   A.Cons ctorName args ->
     collectArgs args $ \argVals -> do
       (_, A.Ctor _ ctorTyArgs, _) <- asks (fromJust . symTabLookupCtor ctorName . tcSymTab)
       -- Box each argument as needed
-      pairs <- forM (argVals `zip` ctorTyArgs) $ \(jv, cty) -> do
-        jty <- getJvalueType jv
-        rebindBoxing jv jty (boxedVal cty)
-      let (argVals', boxConvs) = unzip pairs
-      let boxConv = appEndo (fold (fmap Endo boxConvs))
-      varName <- freshVar
-      boxConv . makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals' <$>
-        local (insertVar varName ty) (cont (J.JVar varName))
+      collectRebinds (argVals `zip` (boxedVal <$> ctorTyArgs)) $ \argVals' -> do
+        varName <- freshVar
+        makeJexpr ty . J.JApp varName (J.CCtor ctorName) argVals' <$>
+          local (insertVar varName ty) (cont (J.JVar varName))
   A.App funcName args ->
     collectArgs args $ \argVals -> do
       varName <- freshVar
       (_, funcArgs, funcRetTy, _) <- asks (fromJust . symTabLookupStaticFun funcName . tcSymTab)
-      argTys <- traverse getJvalueType argVals
-      tuples <- sequence [rebindBoxing val aTy (boxedVal faTy)
-                         | (((_, faTy), val), aTy) <- funcArgs `zip` argVals `zip` argTys]
-      let (argVals', boxConvArgs_) = unzip tuples
-      let boxConvArgs = appEndo (fold (fmap Endo boxConvArgs_))
-      let ty' = if isBoxed funcRetTy then Fix (TyBox ty) else ty
-      boxConvArgs . makeJexpr ty' . J.JApp varName (J.CFunc funcName) argVals' <$>
-        local (insertVar varName ty') (cont (J.JVar varName))
+      let valueBoxPairs = [(val, boxedVal fTy) | (val, (_, fTy)) <- argVals `zip` funcArgs]
+      collectRebinds valueBoxPairs $ \argVals' -> do
+        let ty' = if isBoxed funcRetTy then Fix (TyBox ty) else ty
+        makeJexpr ty' . J.JApp varName (J.CFunc funcName) argVals' <$>
+          local (insertVar varName ty') (cont (J.JVar varName))
   A.Cast expr numTy ->
-    anfTransform expr $ \jexpr -> do
-      varName <- freshVar
-      valTy <- getJvalueType jexpr
-      (jexpr', boxConv) <- rebindBoxing jexpr valTy Unboxed
+    anfTransform expr $ \jexpr ->
       -- Resulting value is unboxed, so use original type
-      boxConv . makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr'] <$>
-        local (insertVar varName ty) (cont (J.JVar varName))
+      rebindBoxing jexpr Unboxed $ \jexpr' -> do
+        varName <- freshVar
+        makeJexpr ty . J.JApp varName (J.CCast numTy) [jexpr'] <$>
+          local (insertVar varName ty) (cont (J.JVar varName))
   A.Print expr ->
-    anfTransform expr $ \jval -> do
-      varName <- freshVar
-      valTy <- getJvalueType jval
-      (jval', boxConv) <- rebindBoxing jval valTy Unboxed
+    anfTransform expr $ \jval ->
       -- Resulting value is unboxed, so use original type
-      boxConv . makeJexpr ty . J.JApp varName J.CPrint [jval'] <$>
-        local (insertVar varName ty) (cont (J.JVar varName))
+      rebindBoxing jval Unboxed $ \jval' -> do
+        varName <- freshVar
+        makeJexpr ty . J.JApp varName J.CPrint [jval'] <$>
+          local (insertVar varName ty) (cont (J.JVar varName))
   A.FunRef name -> do
     varName <- freshVar
     makeJexpr ty . J.JApp varName (J.CFunRef name) [] <$>
       local (insertVar varName ty) (cont (J.JVar varName))
+
+-- | Utility function for collecting arguments to CPS style functions
+collectConts :: (a -> (b -> m c) -> m c)
+             -> [a]
+             -> ([b] -> m c)
+             -> m c
+collectConts f as cont = go [] as
+  where
+    go vals [] = cont (reverse vals)
+    go vals (x:xs) = f x $ \v -> go (v:vals) xs
 
 -- | Normalize each expression in sequential order, and then run the
 -- continuation with the expression values.
@@ -300,7 +298,14 @@ collectArgs :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m
             => [A.AnnExpr flds] -- ^ Argument expressions
             -> ([J.JValue] -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
             -> m (J.AnnExpr '[ 'ExprType])
-collectArgs = go []
-  where
-    go vals [] mcont = mcont (reverse vals)
-    go vals (x:xs) mcont = anfTransform x $ \v -> go (v:vals) xs mcont
+collectArgs = collectConts anfTransform
+-- collectArgs = go []
+--   where
+--     go vals [] mcont = mcont (reverse vals)
+--     go vals (x:xs) mcont = anfTransform x $ \v -> go (v:vals) xs mcont
+
+collectRebinds :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshVar m)
+            => [(J.JValue, BoxedVal)] -- ^ Value-boxing pairs
+            -> ([J.JValue] -> m (J.AnnExpr '[ 'ExprType])) -- ^ Continuation
+            -> m (J.AnnExpr '[ 'ExprType])
+collectRebinds = collectConts (uncurry rebindBoxing)
