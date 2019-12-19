@@ -184,7 +184,7 @@ typeVar = Fix . TyVar <$> identifier
 typeAdt :: Parser m Type
 typeAdt = do
   name <- typeIdentifier
-  tparams <- many typeVar
+  tparams <- many (parens type' <|> type')
   pure $ Fix (TyAdt name tparams)
 
 typeAtom :: Parser m Type
@@ -228,7 +228,7 @@ declFun = lexeme $
 constructor :: Parser m Ast.Constructor
 constructor = lexeme $ do
   name <- typeIdentifier
-  args <- many type'
+  args <- many (parens type' <|> type')
   pure $ Ast.Ctor name args
 
 declAdt :: Parser m (Decl SourcedExpr)

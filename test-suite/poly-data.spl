@@ -1,8 +1,33 @@
 data Maybe a = { Just a | Nothing }
 
-fun main : Int := {
+fun testJust : Int := {
   let foo = Just 5 in # 0
-  case foo of
-    Just x => let _ = println("Just OK") in x
+  let asdf = case foo of
+    Just x => let _ = println("Got Just!") in x
     Nothing => let _ = println("ERROR: Got Nothing") in 0
+  in asdf
+}
+
+data List a = { Nil | Cons a (List a) }
+
+fun head (xs : List a) : Maybe a := {
+  case xs of
+    Nil => Nothing
+    Cons h t => Just h
+}
+
+fun numberList (n : Int) : List Int := {
+  if n <= 0 then Nil else Cons n @numberList(n - 1)
+}
+
+fun printList (xs : List a) : Int := {
+  case xs of
+    Nil => 0
+    Cons h t =>
+      let _ = println("Item") in
+      @printList(t)
+}
+
+fun main : Int := {
+  @printList(@numberList(10))
 }
