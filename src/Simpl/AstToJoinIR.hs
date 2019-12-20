@@ -32,7 +32,7 @@ import Simpl.Annotation
 import Simpl.SymbolTable
 import qualified Simpl.Ast as A
 import qualified Simpl.JoinIR.Syntax as J
-import Simpl.Type (Type, TypeF(TyBox, TyVar, TyAdt), substituteTypeVars, typeRepIsPtr)
+import Simpl.Type (Type, TypeF(TyBox, TyVar, TyAdt, TyFun), substituteTypeVars, typeRepIsPtr)
 import Simpl.Typecheck (literalType)
 import Simpl.Util.Supply
 import qualified Simpl.Util.Stream as Stream
@@ -270,8 +270,14 @@ anfTransform (Fix ae) cont = let ty = getType ae in case annGetExpr ae of
   A.App funcName args ->
     collectArgs args $ \argVals -> do
       varName <- freshVar
-      (_, funcArgs, funcRetTy, _) <- asks (fromJust . symTabLookupStaticFun funcName . tcSymTab)
-      let valueBoxPairs = [(val, boxedVal fTy) | (val, (_, fTy)) <- argVals `zip` funcArgs]
+      -- Function references are stored in variable scope, so we need to perform
+      -- lookup there.
+      funcCandidate <- asks (fmap unfix . symTabLookupVar funcName . tcSymTab) >>= \case
+        Just (TyFun params resTy) -> pure $ Just (params, resTy)
+        Just t -> error $ "Variable called as function: " ++ show funcName ++ " : " ++ show t
+        Nothing -> asks (fmap (\(_, p, r) -> (snd <$> p, r)) . symTabLookupFun funcName . tcSymTab)
+      let (funcArgs, funcRetTy) = fromJust funcCandidate
+      let valueBoxPairs = [(val, boxedVal fTy) | (val, fTy) <- argVals `zip` funcArgs]
       collectRebinds valueBoxPairs $ \argVals' -> do
         let ty' = if isBoxed funcRetTy then Fix (TyBox ty) else ty
         makeJexpr ty' . J.JApp varName (J.CFunc funcName) argVals' <$>

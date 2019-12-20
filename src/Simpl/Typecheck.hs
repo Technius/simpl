@@ -16,7 +16,6 @@ import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
 import Data.Maybe (fromMaybe)
-import Data.Foldable (asum)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
@@ -229,12 +228,13 @@ inferType = cata $ \ae -> case annGetExpr ae of
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
       pure $ annotate (BinOp op x y) annFields rTy
 
+    -- | Looks up a function from either variable or function scope. Does not
+    -- instantiate type variables (should be handled on a per-construct basis).
     lookupFun :: Text -> [UType] -> Typecheck fields (Set Text, [Type], Type)
     lookupFun name argTys =
       asks (symTabLookupVar name) >>= \case
         Just ty ->
           case unfix ty of
-            -- TODO: Currently there is no way to know if the function is polymorphic
             TyFun params resTy -> pure (Set.empty, params, resTy)
             _ -> do
               resTy <- mkMetaVar
@@ -242,11 +242,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
                   expected = TyFun argTys resTy
               throwError $ TyErrMismatch expected got
         Nothing ->
-          -- TODO: Instantiate type variables
-          let lookupStatic n = fmap (\(tvars, p, r, _) -> (tvars, p, r)) . symTabLookupStaticFun n
-              lookupExtern n = fmap (\(p, r) -> (Set.empty, p, r)) . symTabLookupExternFun n
-              result = traverse (\f -> asks (f name)) [lookupStatic, lookupExtern] in
-          asum <$> result >>= \case
+          asks (symTabLookupFun name) >>= \case
             Just (tvars, params, resTy) -> pure (tvars, snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 

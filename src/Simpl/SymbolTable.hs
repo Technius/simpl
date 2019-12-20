@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 module Simpl.SymbolTable where
 
+import Control.Applicative ((<|>))
 import Data.List (find)
 import Data.Maybe (mapMaybe, listToMaybe)
 import Data.Map.Strict (Map)
@@ -90,3 +91,8 @@ symTabLookupStaticFun name = Map.lookup name . symTabFuns
 
 symTabLookupExternFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type)
 symTabLookupExternFun name = Map.lookup name . symTabExtern
+
+symTabLookupFun :: Text -> SymbolTable e -> Maybe (Set Text, [(Text, Type)], Type)
+symTabLookupFun name tab = static tab <|> extern tab
+  where static = fmap (\(tvars, p, r, _) -> (tvars, p, r)) . symTabLookupStaticFun name
+        extern = fmap (\(p, r) -> (Set.empty, p, r)) . symTabLookupExternFun name
