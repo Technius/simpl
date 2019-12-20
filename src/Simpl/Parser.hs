@@ -188,7 +188,7 @@ typeAdt = do
   pure $ Fix (TyAdt name tparams)
 
 typeAtom :: Parser m Type
-typeAtom = typeLit <|> typeAdt
+typeAtom = typeLit <|> typeAdt <|> typeVar
 
 typeFun :: Parser m Type
 typeFun = lexeme $ do
@@ -198,7 +198,7 @@ typeFun = lexeme $ do
   pure . Fix $ TyFun (first : init rest) (last rest)
 
 type' :: Parser m Type
-type' = try typeFun <|> typeAtom <|> typeVar <?> "type"
+type' = try typeFun <|> typeAtom <?> "type"
 
 declFunParamList :: Parser m [(Text, Type)]
 declFunParamList = lexeme $ option [] (parens params)
