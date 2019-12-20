@@ -372,13 +372,10 @@ callableCodegen callable args = case callable of
     -- Tag (index = 0)
     tagStruct2 <- LLVMIR.insertValue tagStruct1 (LLVMIR.int32 (fromIntegral ctorIndex)) [0]
     -- Data pointer (index = 1)
-    let ctorTy = LLVM.NamedTypeReference ctorName
-    let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
-    -- Use offsets to calculate struct size
-    ctorStructSize <- LLVMIR.gep nullptr [LLVMIR.int32 0]
-                      >>= flip LLVMIR.ptrtoint LLVM.i64
     -- Allocate memory for constructor.
     -- For now, use "leak memory" as an implementation strategy for deallocation.
+    let ctorTy = LLVM.NamedTypeReference ctorName
+    let ctorStructSize = LLVM.ConstantOperand (LLVMC.ZExt (LLVMC.sizeof ctorTy) LLVM.i64)
     ctorStructPtr <- LLVMIR.call RT.mallocRef [(ctorStructSize, [])] >>=
                      flip LLVMIR.bitcast (LLVM.ptr ctorTy)
     values <- traverse jvalueCodegen args
