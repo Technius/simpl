@@ -172,7 +172,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
     (tvars, params, ty) <- lookupFun name (extractTy <$> argsTc)
     -- Check parameter count
     let numParams = length params
-    let paramCount = length params
+    let paramCount = length args
     when (numParams /= paramCount) $
       throwError $ TyErrArgCount numParams paramCount params
     let unifyExprTy expr pTy =
