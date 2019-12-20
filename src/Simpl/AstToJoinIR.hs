@@ -190,8 +190,6 @@ transformBranch :: (HasType flds, MonadReader (TransformCtx flds) m, MonadFreshV
                 -> m (J.JBranch (J.AnnExpr '[ 'ExprType]))
 transformBranch cf guardTy boxVal (A.BrAdt ctorName argNames expr) = do
   (_, A.Ctor _ argTys, _) <- asks (fromJust . symTabLookupCtor ctorName . tcSymTab)
-  let withScope ctx = foldr (uncurry insertVar) ctx (argNames `zip` argTys)
-  jexpr <- local withScope $ anfTransform expr $ withRebindBoxing boxVal J.JVal
   argTys' <- case unfix guardTy of
      TyAdt name tvars -> do
        (tvars', _) <- asks (fromJust . symTabLookupAdt name . tcSymTab)
@@ -203,6 +201,8 @@ transformBranch cf guardTy boxVal (A.BrAdt ctorName argNames expr) = do
              then t' else Fix (TyBox t')
          _ -> substituteTypeVars tvarMapping t
      _ -> pure argTys
+  let withScope ctx = foldr (uncurry insertVar) ctx (argNames `zip` argTys')
+  jexpr <- local withScope $ anfTransform expr $ withRebindBoxing boxVal J.JVal
   pure $ J.BrAdt ctorName (argNames `zip` argTys') (J.Cfe jexpr cf)
 
 
