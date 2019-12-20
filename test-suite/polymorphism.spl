@@ -14,6 +14,10 @@ fun test_case (x : Int) : String := {
     Nope => "bye")
 }
 
+fun hi : String := {
+  let f = &test_case in @test_case(0)
+}
+
 fun main : Int := {
     let _ = println(@id("hi")) in
     let y = 5 in

@@ -16,18 +16,44 @@ fun head (xs : List a) : Maybe a := {
     Cons h t => Just h
 }
 
+# FIXME: passing a function ref w/ unboxed argument to a function
+# requiring a function ref w/ boxed argument does not work.
+# Passed function ref needs to be automatically "promoted" to a
+# boxed version.
+
+# fun filter (xs : List a, f : a -> Bool) : List a := {
+#   case xs of
+#     Nil => Nil
+#     Cons h t => if @f(h) then Cons h @filter(t, f) else @filter(t, f)
+# }
+
+fun filter (xs : List Int, f : Int -> Bool) : List Int := {
+  case xs of
+    Nil => Nil
+    Cons h t =>
+      let newT = @filter(t, f) in
+      if @f(h) then Cons h newT else newT
+}
+
+fun lte5 (x: Int) : Bool := {
+  x <= 5
+}
+
 fun numberList (n : Int) : List Int := {
   if n <= 0 then Nil else Cons n @numberList(n - 1)
 }
 
-fun printList (xs : List a) : Int := {
+fun printList (xs : List a, msg : String) : Int := {
   case xs of
     Nil => 0
     Cons h t =>
-      let _ = println("Item") in
-      @printList(t)
+      let _ = println(msg) in
+      @printList(t, msg)
 }
 
 fun main : Int := {
-  @printList(@numberList(10))
+  let nums = @numberList(10) in
+  let x1 = @printList(nums, "numberList") in
+  let x2 = @printList(@filter(nums, &lte5), "filter(numberList, <= 5)") in
+  x2
 }
