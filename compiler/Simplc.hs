@@ -75,10 +75,8 @@ codegen srcFile@(SourceFile _ decls) =
       handleExceptions . liftIO $
         withContext $ \cr ->
           buildRuntime cr $ \runtimeMod ->
-            buildModule programAst $ \programMod -> do
+            buildModule programAst dumpIR $ \programMod -> do
               linkModules programMod runtimeMod
-              when dumpIR $
-                moduleLLVMAssembly programMod >>= B.hPutStr stderr
               outputModule programMod outputName
     _ -> throwError $ ["No main function found"]
   where
@@ -105,10 +103,12 @@ handleExceptions = flip catches $
     handler :: String -> CliM ()
     handler err = throwError $ ["An error occurred:"] ++ lines err
 
-buildModule :: LLVM.AST.Module -> (Module -> IO a) -> IO a
-buildModule modAst cont =
+buildModule :: LLVM.AST.Module -> Bool -> (Module -> IO a) -> IO a
+buildModule modAst dumpIR cont =
   withContext $ \ctx ->
     withModuleFromAST ctx modAst $ \llvmMod -> do
+      when dumpIR $
+        moduleLLVMAssembly llvmMod >>= B.hPutStr stderr
       putStrLn "Verifying AST"
       verify llvmMod
       putStrLn "AST verified successfully"
