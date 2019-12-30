@@ -66,7 +66,8 @@ codegen srcFile@(SourceFile _ decls) =
   case find isMain decls of
     Just _ -> do
       compilerOpts <- asks $ \cliOpts -> defaultCompilerOpts
-            { enableDiagnostics = Cli.enableDiagnostics cliOpts }
+            { enableDiagnostics = Cli.enableDiagnostics cliOpts
+            , dumpJoinIR = Cli.dumpJoinIR cliOpts }
       liftIO $ putStrLn "Running compiler pipeline"
       let pipeline = ExceptT (fullCompilerPipeline compilerOpts srcFile)
       programAst <- CliM . lift $ withExceptT (pure . ("Error: " ++) . show) pipeline

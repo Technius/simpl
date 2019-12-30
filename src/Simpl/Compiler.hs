@@ -1,12 +1,15 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Set (Set)
 import Data.Text.Prettyprint.Doc (pretty)
 import Data.Text (Text)
+import qualified Data.Map as Map
+import System.IO (stderr, hPrint)
 
 import qualified LLVM.AST as LLVM
 import qualified LLVM.Module as LLVMM
@@ -61,11 +64,13 @@ fullCompilerPipeline options srcFile@(SourceFile _name decls) =
     typedSymTable <- MkCompilerMonad . lift . withExceptT ErrTypecheck $
           liftEither (runTypecheck symTable newSTTypecheck)
     let jSymTable = astToJoinIR typedSymTable
-    -- TODO: Add compiler flag to dump JoinIR
-    -- liftIO $ forM_ (symTabFuns jSymTable) $ \(args, ty, expr) -> do
-    --   print (pretty args <> pretty " :: " <> pretty ty)
-    --   print (pretty (unannotate expr))
     let srcCode = unlines [show (pretty (unannotate <$> d)) | d <- decls]
+
+    when (dumpJoinIR options) $
+      liftIO $ forM_ (Map.toList $ symTabFuns jSymTable) $ \(name, (_, args, ty, expr)) -> do
+        hPrint stderr (pretty name <> " " <> pretty args <> " :: " <> pretty ty)
+        hPrint stderr (pretty (unannotate expr))
+
     pure $ runCodegen options srcCode jSymTable
   where
     tycheckFuns :: (Set Text, [(Text, Type)], Type, SourcedExpr)

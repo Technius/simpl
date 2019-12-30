@@ -12,6 +12,8 @@ data CliCmd
             , target :: Target
               -- | Whether the LLVM IR should be printed on stderr
             , dumpIR :: Bool
+              -- | Whether JoinIR should be printed on stderr
+            , dumpJoinIR :: Bool
               -- | Whether diagnostics should be printed at runtime
             , enableDiagnostics :: Bool
             }
@@ -35,6 +37,7 @@ compileCommand = Compile <$>
   <*> strOption (short 'o' <> long "output" <> value "a.out")
   <*> option targetReader (short 'T' <> long "target" <> value NativeTarget)
   <*> switch (long "dump-ir")
+  <*> switch (long "dump-joinir")
   <*> switch (long "diagnostics")
 
 runCliParser :: IO CliCmd
