@@ -20,6 +20,8 @@ import Data.Foldable (traverse_)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
+import Data.Text.Prettyprint.Doc (Pretty, pretty)
+import qualified Data.Text.Prettyprint.Doc as PP
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -43,6 +45,21 @@ data TypeError
 instance Fallible TypeF UVar TypeError where
   occursFailure = TyErrOccurs
   mismatchFailure = TyErrMismatch
+
+instance Pretty TypeError where
+  pretty = \case
+    TyErrOccurs uv uty ->
+      "could not recursively unify" PP.<+> PP.viaShow uv
+      PP.<+> "with" PP.<+> PP.viaShow uty
+    TyErrMismatch expected actual ->
+      "type mismatch: expected" PP.<+> PP.viaShow expected
+      <> ", got" PP.<+> PP.viaShow actual
+    TyErrArgCount expCnt actCnt expTys ->
+      "argument count mismatch: expected" PP.<+> pretty expCnt PP.<+> "arguments, got"
+      PP.<+> PP.viaShow actCnt PP.<+> "arguments" PP.<+> PP.viaShow expTys
+    TyErrNoSuchCtor ctorName -> "No such constructor:" PP.<+> pretty ctorName
+    TyErrAmbiguousType uty -> "Ambiguous type:" PP.<+> PP.viaShow uty
+    TyErrNoSuchVar name -> "No such identifier:" PP.<+> pretty name
 
 newtype Typecheck fields a = Typecheck
   { unTypecheck ::

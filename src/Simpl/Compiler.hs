@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -6,7 +7,8 @@ module Simpl.Compiler where
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Set (Set)
-import Data.Text.Prettyprint.Doc (pretty)
+import Data.Text.Prettyprint.Doc (Pretty, pretty)
+import qualified Data.Text.Prettyprint.Doc as PP
 import Data.Text (Text)
 import qualified Data.Map as Map
 import System.IO (stderr, hPrint)
@@ -30,6 +32,11 @@ data CompilerErr
   = ErrTypecheck TypeError
   | ErrAnalysis
   deriving (Show)
+
+instance Pretty CompilerErr where
+  pretty = \case
+    ErrTypecheck err -> PP.hsep ["Type error:", pretty err]
+    ErrAnalysis -> "Static analysis error <TODO>"
 
 -- | Monad for handling compiler
 newtype CompilerMonad e a = MkCompilerMonad

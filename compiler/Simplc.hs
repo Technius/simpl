@@ -13,6 +13,7 @@ import Control.Monad (forM_)
 import Control.Monad.Except
 import Control.Monad.Reader
 import Data.List (find)
+import Data.Text.Prettyprint.Doc (pretty)
 import Simpl.Ast
 import Simpl.Compiler
 import Simpl.CompilerOptions
@@ -70,7 +71,7 @@ codegen srcFile@(SourceFile _ decls) =
             , dumpJoinIR = Cli.dumpJoinIR cliOpts }
       liftIO $ putStrLn "Running compiler pipeline"
       let pipeline = ExceptT (fullCompilerPipeline compilerOpts srcFile)
-      programAst <- CliM . lift $ withExceptT (pure . ("Error: " ++) . show) pipeline
+      programAst <- CliM . lift $ withExceptT (pure . show . pretty) pipeline
       dumpIR <- asks Cli.dumpIR
       outputName <- asks Cli.outputFile
       handleExceptions . liftIO $
