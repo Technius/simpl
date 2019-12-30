@@ -154,10 +154,9 @@ instance Pretty a => Pretty (ControlFlow a) where
     where
       flatParens d = PP.flatAlt d (PP.parens d)
 
-instance Pretty JExpr where
-  pretty = f . unfix
+instance Pretty a => Pretty (JExprF a) where
+  pretty = f
     where
-      f :: JExprF JExpr -> PP.Doc ann
       f = \case
         JVal v -> pretty v
         JLet n v next -> PP.hsep ["let", pretty n, "=", pretty v, "in"] <> PP.softline <> pretty next
@@ -168,6 +167,9 @@ instance Pretty JExpr where
         JApp name clbl args next ->
           PP.hsep (["let app", pretty name, "=", pretty clbl] ++ (pretty <$> args) ++ ["in"])
           <> PP.hardline <> pretty next
+
+instance Pretty JExpr where
+  pretty (Fix e) = pretty e
 
 instance Pretty a => Pretty (Cfe a) where
   pretty (Cfe expr cf) =
