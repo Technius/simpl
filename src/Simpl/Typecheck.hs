@@ -15,7 +15,8 @@ import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
+import Data.Foldable (traverse_)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
@@ -118,8 +119,9 @@ inferType = cata $ \ae -> case annGetExpr ae of
         -- Instantiate type variables
         substMap <- instantiateVars (Set.fromList tvars)
         let conArgs = substituteUVars substMap . typeToUtype <$> ctorArgTys
-        argTys' <- traverse (uncurry unifyTy) (zip conArgs argTys)
-        let newTy = UTerm (TyAdt adtName argTys')
+        traverse_ (uncurry unifyTy) (zip conArgs argTys)
+        let newTvars = [fromJust $ Map.lookup v substMap | v <- tvars]
+        let newTy = UTerm (TyAdt adtName newTvars)
         pure $ annotate (Cons name args) (annGetAnn ae) newTy
       Nothing -> throwError $ TyErrNoSuchCtor name
   Case branchMs valM -> do
@@ -174,14 +176,14 @@ inferType = cata $ \ae -> case annGetExpr ae of
     let paramCount = length args
     when (numParams /= paramCount) $
       throwError $ TyErrArgCount numParams paramCount params
-    let unifyExprTy expr pTy =
-          annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
 
     -- Instantiate type variables
     substMap <- instantiateVars tvars
     let instParams = substituteUVars substMap . typeToUtype <$> params
     let resTy = substituteUVars substMap (typeToUtype ty)
     -- Check parameter types
+    let unifyExprTy expr pTy =
+          annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
     params' <- zipWithM unifyExprTy argsTc instParams
     -- Annotate with result type
     pure $ annotate (App name params') (annGetAnn ae) resTy
@@ -274,7 +276,7 @@ typeToUtype = cata $ \case
   TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
   TyString -> UTerm TyString
-  TyAdt n tparams -> UTerm (TyAdt n tparams) -- TODO: Instantiate variables somewhere
+  TyAdt n tparams -> UTerm (TyAdt n tparams)
   TyFun args res -> UTerm (TyFun args res)
   TyVar n -> UTerm (TyVar n)
   TyBox _ -> error "TyBox should not be in SimPL AST"

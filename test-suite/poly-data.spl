@@ -57,3 +57,19 @@ fun main : Int := {
   let x2 = @printList(@filter(nums, &lte5), "filter(numberList, <= 5)") in
   x2
 }
+
+data AddTable a = { Add (a -> a -> a) }
+
+fun add (x : a, y : a, table : AddTable a) : a := {
+  case table of
+    Add f => @f(x, y)
+}
+
+fun add_Int (x : Int, y : Int) : Int := {
+  x + y
+}
+
+fun addTable_Int : AddTable Int := {
+  let f = &add_Int in
+  Add f
+}
