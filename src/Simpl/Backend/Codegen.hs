@@ -48,7 +48,7 @@ import Simpl.Annotation hiding (AnnExpr, AnnExprF)
 import Simpl.Ast (BinaryOp(..), Constructor(..), Literal(..))
 import Simpl.CompilerOptions
 import Simpl.SymbolTable
-import Simpl.Type (Type, TypeF(..), Numeric(..))
+import Simpl.Type (Type, TypeF(..), Numeric(..), typeRepIsPtr)
 import Simpl.Typecheck (literalType)
 import Simpl.Backend.Runtime ()
 import Simpl.JoinIR.Syntax
@@ -57,11 +57,12 @@ import qualified Simpl.Backend.Runtime as RT
 data CodegenTable =
   MkCodegenTable { tableVars :: Map Text (TypeF Type, LLVM.Operand) -- ^ Pointer to variables
                  , tableCtors :: Map Text (LLVM.Name, LLVM.Name, Int) -- ^ Data type name, ctor name, index
-                 , tableAdts :: Map Text (LLVM.Name, Type, [Constructor])
+                 , tableAdts :: Map Text (LLVM.Name, [Text], [Constructor])
                  , tableFuns :: Map Text LLVM.Operand
                  , tableJoinValues :: Map Text (LLVM.Name, [(LLVM.Operand, LLVM.Name)])
                  , tablePrintf :: LLVM.Operand
-                 , tableOptions :: CompilerOpts }
+                 , tableOptions :: CompilerOpts
+                 , tableTypeTags :: Map (TypeF Type) LLVM.Operand }
   deriving (Show)
 
 -- | An empty codegen table. This will cause a crash if codegen is run when not
@@ -74,7 +75,8 @@ emptyCodegenTable =
                  , tableFuns = Map.empty
                  , tableJoinValues = Map.empty
                  , tablePrintf = error "printf not set"
-                 , tableOptions = defaultCompilerOpts }
+                 , tableOptions = defaultCompilerOpts
+                 , tableTypeTags = Map.empty }
 
 newtype CodegenT m a =
   CodegenT { unCodegen :: StateT CodegenTable m a }
@@ -119,6 +121,32 @@ lookupValueType :: MonadState CodegenTable m
 lookupValueType = \case
   JVar name -> gets (fst . fromJust . Map.lookup name . tableVars)
   JLit lit -> pure $ literalType lit
+
+-- | If the type tag does not exist, emit it into the IR. Then return the
+-- operand of the type tag.
+lookupTypeTag :: (LLVMIR.MonadModuleBuilder m, MonadState CodegenTable m)
+              => TypeF Type
+              -> m LLVM.Operand
+lookupTypeTag ty =
+  gets (Map.lookup ty . tableTypeTags) >>= \case
+    Just oper -> pure oper
+    Nothing -> do
+      let name = case ty of
+            TyNumber NumInt -> "Int"
+            TyNumber NumDouble -> "Double"
+            TyBool -> "Bool"
+            TyString -> "String"
+            TyAdt n _ -> "data." <> n
+            x -> error ("TODO: handle tag type lookup for " ++ show x)
+      let llvmTy = typeToLLVM (Fix ty)
+      let size = LLVMC.sizeof llvmTy
+      let tagContents = LLVMC.Struct { LLVMC.structName = Nothing
+                                     , LLVMC.isPacked = False
+                                     , LLVMC.memberValues = [size] }
+      let lname = LLVM.mkName $ "simpl.tag." ++ Text.unpack name
+      oper <- LLVMIR.global lname RT.typeTagType tagContents
+      modify (\t -> t { tableTypeTags = Map.insert ty oper (tableTypeTags t) })
+      pure oper
 
 bindVariable :: MonadState CodegenTable m
              => Text
@@ -273,7 +301,9 @@ controlFlowCodegen val valOper = \case
         let labelName = "case_" <> fromString (Text.unpack name) in
         (name, ) <$> LLVMIR.freshName labelName
     -- Assume the symbol table and type information is correct
-    dataName <- (\case { TyAdt n _ -> n; _ -> error "" }) <$> lookupValueType val
+    dataName <- flip fmap (lookupValueType val) $ \case
+      TyAdt n _ -> n
+      t -> error $ "controlFlowCodegen: Unexpected case value type: " ++ show t ++ " " ++ show val
     ctors <- gets ((\(_,_,cs) -> cs) . fromJust . Map.lookup dataName . tableAdts)
     let ctorNames = ctorGetName <$> ctors
     let usedLabelTriples = filter (\(_, (n, _)) -> n `elem` ctorNames) $ [0..] `zip` allCaseLabels
@@ -284,25 +314,24 @@ controlFlowCodegen val valOper = \case
     forM_ (usedLabelTriples `zip` branches) $ \((_, (ctorName, label)), br) -> do
       let expr = branchGetExpr br
       let cf = branchGetControlFlow br
-      (_, ctorLLVMName, index) <- gets (fromJust . Map.lookup ctorName . tableCtors)
-      let Ctor _ argTys = ctors !! index
-      let bindingPairs = branchGetBindings br `zip` (typeToLLVM <$> argTys)
+      (_, ctorLLVMName, _) <- gets (fromJust . Map.lookup ctorName . tableCtors)
+      let bindingPairs = branchGetBindings br
       LLVMIR.emitBlockStart label
       ctorPtr <- LLVMIR.bitcast dataPtr (LLVM.ptr (LLVM.NamedTypeReference ctorLLVMName))
       let ctorPtrOffset = LLVMIR.int32 0
-      bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, llvmTy)) -> do
+      bindings <- forM ([0..] `zip` bindingPairs) $ \(i, (n, ty)) -> do
         let ctorPtrIndex = LLVMIR.int32 i
         -- Need to bitcast the ptr type because we need a concrete type. We
         -- also need to load the data immediately because of how variables
         -- are implemented.
         v <- LLVMIR.gep ctorPtr [ctorPtrOffset, ctorPtrIndex]
-             >>= flip LLVMIR.bitcast (LLVM.ptr llvmTy)
+             >>= flip LLVMIR.bitcast (LLVM.ptr (typeToLLVM ty))
              >>= flip LLVMIR.load 0
-        ty <- lookupValueType (JVar n)
-        pure (n, (ty, v))
+        pure (n, (unfix ty, v))
       let updateTable t = t { tableVars = Map.union (tableVars t) (Map.fromList bindings) }
-      (exprVal, exprOper) <- jexprCodegen expr
-      localCodegenTable updateTable (controlFlowCodegen exprVal exprOper cf)
+      localCodegenTable updateTable $ do
+        (exprVal, exprOper) <- jexprCodegen expr
+        controlFlowCodegen exprVal exprOper cf
     LLVMIR.emitBlockStart defLabel
     LLVMIR.unreachable
   JJump lbl -> do
@@ -344,13 +373,10 @@ callableCodegen callable args = case callable of
     -- Tag (index = 0)
     tagStruct2 <- LLVMIR.insertValue tagStruct1 (LLVMIR.int32 (fromIntegral ctorIndex)) [0]
     -- Data pointer (index = 1)
-    let ctorTy = LLVM.NamedTypeReference ctorName
-    let nullptr = LLVM.ConstantOperand (LLVMC.Null (LLVM.ptr ctorTy))
-    -- Use offsets to calculate struct size
-    ctorStructSize <- LLVMIR.gep nullptr [LLVMIR.int32 0]
-                      >>= flip LLVMIR.ptrtoint LLVM.i64
     -- Allocate memory for constructor.
     -- For now, use "leak memory" as an implementation strategy for deallocation.
+    let ctorTy = LLVM.NamedTypeReference ctorName
+    let ctorStructSize = LLVM.ConstantOperand (LLVMC.ZExt (LLVMC.sizeof ctorTy) LLVM.i64)
     ctorStructPtr <- LLVMIR.call RT.mallocRef [(ctorStructSize, [])] >>=
                      flip LLVMIR.bitcast (LLVM.ptr ctorTy)
     values <- traverse jvalueCodegen args
@@ -377,6 +403,36 @@ callableCodegen callable args = case callable of
       pure $ LLVMIR.int64 0
     _ -> error $ "callableCodegen: expected 1 args to CPrint, got " ++ show (length args)
   CFunRef name -> gets (fromJust . Map.lookup name . tableFuns)
+  CTag -> case args of
+    [jval] -> do
+      ty <- lookupValueType jval
+      tag <- lookupTypeTag ty
+      let llvmTy = typeToLLVM (Fix ty)
+      let size = LLVM.ConstantOperand (LLVMC.ZExt (LLVMC.sizeof llvmTy) LLVM.i64)
+      -- We only need to allocate if the value is not a pointer
+      val <- jvalueCodegen jval
+      bytes <- if typeRepIsPtr ty
+               then LLVMIR.bitcast val (LLVM.ptr LLVM.i8)
+               else do b <- LLVMIR.call RT.mallocRef [(size, [])]
+                       allocRef <- LLVMIR.bitcast b (LLVM.ptr llvmTy)
+                       LLVMIR.store allocRef 0 val
+                       pure b
+      LLVMIR.call RT.taggedBoxRef [(tag, []), (bytes, [])]
+    _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
+  CUntag -> case args of
+    [jval] -> do
+      ty <- lookupValueType jval >>= \case
+        TyBox t -> pure t
+        t -> error $ "callableCodegen: untagging non-boxed type " ++ show t
+      val <- jvalueCodegen jval
+      bytesPtr <- LLVMIR.call RT.taggedUnboxRef [(val, [])]
+      let llvmTy = typeToLLVM ty
+      -- Need to unbox if the stored type is not a pointer
+      if typeRepIsPtr (unfix ty)
+        then LLVMIR.bitcast bytesPtr llvmTy
+        else do ptr <- LLVMIR.bitcast bytesPtr (LLVM.ptr llvmTy)
+                LLVMIR.load ptr 0
+    _ -> error $ "callableCodegen: expected 1 args to CTag, got " ++ show (length args)
 
 -- | Generates code for a [JExpr]
 jexprCodegen
@@ -443,7 +499,8 @@ typeToLLVM = go . unfix
             , LLVM.argumentTypes = typeToLLVM <$> args
             , LLVM.isVarArg = False
             }
-      TyVar _ -> error "compilation of parametrically polymorphic functions not implemented yet"
+      TyVar _ -> LLVM.ptr RT.taggedValueType
+      TyBox _ -> LLVM.ptr RT.taggedValueType
 
 adtToLLVM :: Text
            -> [Constructor]
@@ -515,8 +572,8 @@ moduleCodegen srcCode symTab = mdo
   -- Insert function operands into symbol table before emitting so order of
   -- definition doesn't matter. This works because the codegen monad is lazy.
   modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })
-  -- TODO: Care about type variables
-  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (tvars, params, ty, body)) ->
+  funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (_, params, ty, body)) ->
+    -- Ignore type variables since they're handled with boxing code
     (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do

@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdint.h>
 
 #ifndef RUNTIME_H
 #define RUNTIME_H
@@ -37,5 +38,45 @@ struct simpl_string* simpl_from_cstring(char* cstring);
 char* simpl_string_cstring(const struct simpl_string* s);
 
 int simpl_string_print(const struct simpl_string* s);
+
+/**
+ * Describes static information about a type. This struct should not be visible
+ * from SimPL programs.
+ */
+struct simpl_type_tag {
+    /**
+     * The size (e.g. when compiled) of the type, in bytes.
+     */
+    uint32_t size;
+};
+
+/**
+ * Returns the size recorded in the type tag.
+ */
+uint32_t simpl_tag_size(const struct simpl_type_tag* const);
+
+/**
+ * A value tagged with its type tag. Used for polymorphic functions and
+ * variables.
+ */
+struct simpl_tagged_value {
+    const struct simpl_type_tag* type_tag;
+    void* data;
+};
+
+/**
+ * Returns the type tag of a tagged value.
+ */
+const struct simpl_type_tag* const simpl_tagged_tag(struct simpl_tagged_value*);
+
+/**
+ * Returns a pointer to the boxed value of a tagged value.
+ */
+void* simpl_tagged_unbox(struct simpl_tagged_value*);
+
+/**
+ * Boxes the given value
+ */
+struct simpl_tagged_value* simpl_tagged_box(struct simpl_type_tag* tag, void* data);
 
 #endif

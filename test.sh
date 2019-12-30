@@ -13,5 +13,5 @@ for src_file in $(find "$TEST_DIR" -type f -name '*.spl'); do
     out_name="$TEST_BIN_DIR/$out_name"
     echo "Building ${out_name%.o}..."
     stack exec simplc -- "$src_file" -o "$out_name" $COMPILER_ARGS
-    clang -g -pthread runtime/libgc.a "$out_name" -o "${out_name%.o}" -lm
+    clang -g -pthread "$out_name" runtime/libgc.a -o "${out_name%.o}" -lm
 done

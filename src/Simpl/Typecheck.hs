@@ -15,8 +15,8 @@ import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, asks, local)
 import Control.Monad.Except (ExceptT, MonadError, lift, runExceptT, throwError)
 import Control.Unification
 import Control.Unification.IntVar
-import Data.Maybe (fromMaybe)
-import Data.Foldable (traverse_, asum)
+import Data.Maybe (fromMaybe, fromJust)
+import Data.Foldable (traverse_)
 import Data.Functor.Identity
 import Data.Functor.Foldable (Fix(..), unfix, cata)
 import Data.Text (Text)
@@ -112,13 +112,17 @@ inferType = cata $ \ae -> case annGetExpr ae of
     let argTys = extractTy <$> args
     ctorRes <- asks (symTabLookupCtor name)
     case ctorRes of
-      Just (adtTy, Ctor _ ctorArgTys, _) -> do
-        let conArgs = typeToUtype <$> ctorArgTys
-        let numConArgs = length conArgs
+      Just ((adtName, tvars), Ctor _ ctorArgTys, _) -> do
+        let numConArgs = length ctorArgTys
         when (numConArgs /= length argTys) $
           throwError $ TyErrArgCount numConArgs (length argTys) ctorArgTys
+        -- Instantiate type variables
+        substMap <- instantiateVars (Set.fromList tvars)
+        let conArgs = substituteUVars substMap . typeToUtype <$> ctorArgTys
         traverse_ (uncurry unifyTy) (zip conArgs argTys)
-        pure $ annotate (Cons name args) (annGetAnn ae) (typeToUtype adtTy)
+        let newTvars = [fromJust $ Map.lookup v substMap | v <- tvars]
+        let newTy = UTerm (TyAdt adtName newTvars)
+        pure $ annotate (Cons name args) (annGetAnn ae) newTy
       Nothing -> throwError $ TyErrNoSuchCtor name
   Case branchMs valM -> do
     val <- valM
@@ -126,11 +130,21 @@ inferType = cata $ \ae -> case annGetExpr ae of
     branches <- forM branchMs $ \case
       BrAdt ctorName bindings exprM ->
         asks (symTabLookupCtor ctorName) >>= \case
-          Just (dataTy, Ctor _ ctorArgs, _) -> do
+          Just ((adtName, tvars), Ctor _ ctorArgs, _) -> do
             when (length bindings /= length ctorArgs) $
               throwError $ TyErrArgCount (length ctorArgs) (length bindings) ctorArgs
-            _ <- unifyTy valTy (typeToUtype dataTy)
-            let updatedBinds = Map.fromList (bindings `zip` ctorArgs)
+            -- Instantiate type variables
+            substMap <- instantiateVars (Set.fromList tvars)
+            let dataTy = Fix (TyAdt adtName (Fix . TyVar <$> tvars))
+            _ <- unifyTy valTy (substituteUVars substMap (typeToUtype dataTy))
+            let substCtorArgs = substituteUVars substMap . typeToUtype <$> ctorArgs
+            -- TODO: Same hack as in let binding
+            instCtorArgs <- forM substCtorArgs $ \t -> do
+              t' <- utypeToType <$> forceBindings t
+              case t' of
+                Just t'' -> pure t''
+                Nothing -> throwError $ TyErrAmbiguousType t
+            let updatedBinds = Map.fromList (bindings `zip` instCtorArgs)
             -- Infer result type with ctor args bound
             expr <- local (\t -> t { symTabVars = Map.union (symTabVars t) updatedBinds }) exprM
             pure $ BrAdt ctorName bindings expr
@@ -140,8 +154,9 @@ inferType = cata $ \ae -> case annGetExpr ae of
     annotate (Case branches val) (annGetAnn ae) <$> foldM unifyTy resTy brTys
   Let name valM nextM -> do
     val <- valM
+    valTy <- forceBindings (extractTy val)
     -- TODO: Hack, fix this
-    case utypeToType (extractTy val) of
+    case utypeToType valTy of
       Just ty -> do
         next <- local (symTabInsertVar name ty) nextM
         pure $ annotate (Let name val next) (annGetAnn ae) (extractTy next)
@@ -158,27 +173,28 @@ inferType = cata $ \ae -> case annGetExpr ae of
     (tvars, params, ty) <- lookupFun name (extractTy <$> argsTc)
     -- Check parameter count
     let numParams = length params
-    let paramCount = length params
+    let paramCount = length args
     when (numParams /= paramCount) $
       throwError $ TyErrArgCount numParams paramCount params
-    let unifyExprTy expr pTy =
-          annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
 
     -- Instantiate type variables
     substMap <- instantiateVars tvars
     let instParams = substituteUVars substMap . typeToUtype <$> params
     let resTy = substituteUVars substMap (typeToUtype ty)
     -- Check parameter types
+    let unifyExprTy expr pTy =
+          annotate (annGetExpr (unfix expr)) (annGetAnn ae) <$> unifyTy (extractTy expr) pTy
     params' <- zipWithM unifyExprTy argsTc instParams
     -- Annotate with result type
     pure $ annotate (App name params') (annGetAnn ae) resTy
   FunRef name ->
     asks (symTabLookupStaticFun name) >>= \case
-      Just (tvars, params, ty, _) ->
-        -- TODO: How to handle polymorphic function?
-        let paramTys = snd <$> params
-            funTy = typeToUtype (Fix $ TyFun paramTys ty) in
-          pure $ annotate (FunRef name) (annGetAnn ae) funTy
+      Just (tvars, params, ty, _) -> do
+        substMap <- instantiateVars tvars
+        let paramTys = substituteUVars substMap . typeToUtype . snd <$> params
+        let resTy = substituteUVars substMap (typeToUtype ty)
+        let funTy = substituteUVars substMap (UTerm (TyFun paramTys resTy))
+        pure $ annotate (FunRef name) (annGetAnn ae) funTy
       Nothing -> throwError $ TyErrNoSuchVar name
   Cast exprM num -> do
     expr <- exprM
@@ -214,12 +230,13 @@ inferType = cata $ \ae -> case annGetExpr ae of
       rTy <- if unifyArgResult then unifyTy yTy resultTy else pure resultTy
       pure $ annotate (BinOp op x y) annFields rTy
 
+    -- | Looks up a function from either variable or function scope. Does not
+    -- instantiate type variables (should be handled on a per-construct basis).
     lookupFun :: Text -> [UType] -> Typecheck fields (Set Text, [Type], Type)
     lookupFun name argTys =
       asks (symTabLookupVar name) >>= \case
         Just ty ->
           case unfix ty of
-            -- TODO: Currently there is no way to know if the function is polymorphic
             TyFun params resTy -> pure (Set.empty, params, resTy)
             _ -> do
               resTy <- mkMetaVar
@@ -227,11 +244,7 @@ inferType = cata $ \ae -> case annGetExpr ae of
                   expected = TyFun argTys resTy
               throwError $ TyErrMismatch expected got
         Nothing ->
-          -- TODO: Instantiate type variables
-          let lookupStatic n = fmap (\(tvars, p, r, _) -> (tvars, p, r)) . symTabLookupStaticFun n
-              lookupExtern n = fmap (\(p, r) -> (Set.empty, p, r)) . symTabLookupExternFun n
-              result = traverse (\f -> asks (f name)) [lookupStatic, lookupExtern] in
-          asum <$> result >>= \case
+          asks (symTabLookupFun name) >>= \case
             Just (tvars, params, resTy) -> pure (tvars, snd <$> params, resTy)
             Nothing -> throwError (TyErrNoSuchVar name)
 
@@ -263,9 +276,10 @@ typeToUtype = cata $ \case
   TyNumber n -> UTerm (TyNumber n)
   TyBool -> UTerm TyBool
   TyString -> UTerm TyString
-  TyAdt n tparams -> UTerm (TyAdt n tparams) -- TODO: Instantiate variables somewhere
+  TyAdt n tparams -> UTerm (TyAdt n tparams)
   TyFun args res -> UTerm (TyFun args res)
   TyVar n -> UTerm (TyVar n)
+  TyBox _ -> error "TyBox should not be in SimPL AST"
 
 -- | Instantiate the type variables with new unification variables
 instantiateVars :: Set Text -> Typecheck fields (Map.Map Text UType)

@@ -45,3 +45,23 @@ int simpl_string_print(const struct simpl_string* s) {
   free(cstring);
   return 0;
 }
+
+uint32_t simpl_tagged_size(const struct simpl_type_tag* const tag) {
+    return tag->size;
+}
+
+const struct simpl_type_tag* const simpl_tagged_tag(struct simpl_tagged_value* value) {
+    return value->type_tag;
+}
+
+void* simpl_tagged_unbox(struct simpl_tagged_value* value) {
+    return value->data;
+}
+
+
+struct simpl_tagged_value* simpl_tagged_box(struct simpl_type_tag* tag, void* data) {
+    struct simpl_tagged_value *value = simpl_malloc(sizeof(struct simpl_tagged_value));
+    value->type_tag = tag;
+    value->data = data;
+    return value;
+}

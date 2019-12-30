@@ -15,6 +15,9 @@ import Data.Functor.Foldable (Fix(Fix), para, cata)
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc
 import Data.Eq.Deriving (deriveEq1)
+import Data.Ord.Deriving (deriveOrd1)
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Text.Show.Deriving (deriveShow1)
@@ -25,7 +28,7 @@ import Text.Show.Deriving (deriveShow1)
 data Numeric = NumDouble -- ^ 64-bit floating point
              | NumInt -- ^ 64-bit signed integer
              | NumUnknown -- ^ Unknown (defaults to 64-bit floating point)
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 instance Pretty Numeric where
   pretty = \case
@@ -41,12 +44,14 @@ data TypeF a
   | TyAdt Text [a]
   | TyFun [a] a
   | TyVar Text
-  deriving (Show, Functor, Foldable, Traversable)
+  | TyBox a -- ^ Boxed polymorphic type
+  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 type Type = Fix TypeF
 
 $(deriveShow1 ''TypeF)
 $(deriveEq1 ''TypeF)
+$(deriveOrd1 ''TypeF)
 
 instance Unifiable TypeF where
   zipMatch (TyNumber n) (TyNumber m) = case (n, m) of
@@ -63,15 +68,25 @@ instance Unifiable TypeF where
     else Nothing
   zipMatch (TyFun as1 r1) (TyFun as2 r2) =
     if length as1 == length as2 then
+      -- TODO: Check by alpha-equivalence instead of raw equality
       Just $ TyFun (zipWith (curry Right) as1 as2) (Right (r1, r2))
     else
       Nothing
+  zipMatch (TyBox t1) (TyBox t2) = Just $ TyBox (Right (t1, t2))
   zipMatch _ _ = Nothing
 
 isComplexType :: TypeF a -> Bool
 isComplexType = \case
   TyFun _ _ -> True
   _ -> False
+
+-- | Whether a type is represented using a pointer
+typeRepIsPtr :: TypeF Type -> Bool
+typeRepIsPtr = \case
+  TyNumber _ -> False
+  TyBool -> False
+  TyAdt _ _ -> False
+  _ -> True
 
 functionTypeResult :: Type -> Type
 functionTypeResult (Fix ty) = case ty of
@@ -86,7 +101,14 @@ getTypeVars = cata $ \case
   TyVar v -> Set.singleton v
   TyFun vparams vret -> Set.unions (vret:vparams)
   TyAdt _ vargs -> Set.unions vargs
+  TyBox vs -> vs
 
+substituteTypeVars :: Map Text Type -> Type -> Type
+substituteTypeVars vars = cata go
+  where
+    go = \case
+      ty@(TyVar n) -> Map.findWithDefault (Fix ty) n vars
+      ty -> Fix ty
 
 instance Pretty Type where
   pretty = para go
@@ -97,10 +119,11 @@ instance Pretty Type where
       go (TyNumber n) = pretty n
       go TyBool = "Bool"
       go TyString = "String"
-      go (TyAdt n tparams) = pretty n <> hsep (snd <$> tparams)
+      go (TyAdt n tparams) = hsep (pretty n : (snd <$> tparams))
       go (TyFun args res) =
         encloseSep mempty mempty " -> " (wrapComplex <$> args ++ [res])
       go (TyVar n) = pretty n
+      go (TyBox b) = "#<" <> snd b <> ">"
 
 -- | A universally quantified type.
 data PolyType a = PolyType (Set Text) a -- ^ The type variables and the Type

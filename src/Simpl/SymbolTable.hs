@@ -5,7 +5,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 module Simpl.SymbolTable where
 
-import Data.Functor.Foldable (Fix(Fix))
+import Control.Applicative ((<|>))
 import Data.List (find)
 import Data.Maybe (mapMaybe, listToMaybe)
 import Data.Map.Strict (Map)
@@ -17,7 +17,7 @@ import Simpl.Ast
 import Simpl.Type
 
 data SymbolTable expr = MkSymbolTable
-  { symTabAdts :: Map Text (Type, [Constructor])
+  { symTabAdts :: Map Text ([Text], [Constructor]) -- ^ ADT definitions: name, type vars, constructors
   , symTabFuns :: Map Text (Set Text, [(Text, Type)], Type, expr) -- ^ Static functions: free type vars, params, return type, body
   , symTabVars :: Map Text Type -- ^ Variables
   , symTabExtern :: Map Text ([(Text, Type)], Type) -- ^ External functions
@@ -29,7 +29,7 @@ buildSymbolTable (SourceFile _ decls) =
   let adts = Map.fromList $ mapMaybe
         (\case
           DeclAdt name tparams ctors ->
-            Just (name, (Fix (TyAdt name (Fix . TyVar <$> tparams)), ctors))
+            Just (name, (tparams, ctors))
           _ -> Nothing) decls
       funs = Map.fromList $ mapMaybe
         (\case
@@ -47,7 +47,7 @@ buildSymbolTable (SourceFile _ decls) =
      , symTabVars = Map.empty
      , symTabExtern = extern }
 
-symTabModifyAdts :: (Map Text (Type, [Constructor]) -> Map Text (Type, [Constructor]))
+symTabModifyAdts :: (Map Text ([Text], [Constructor]) -> Map Text ([Text], [Constructor]))
                  -> SymbolTable e
                  -> SymbolTable e
 symTabModifyAdts f t = t { symTabAdts = f (symTabAdts t) }
@@ -68,13 +68,13 @@ symTabTraverseExprs f t = do
 
 -- | Searches for the given constructor, returning the name of the ADT, the
 -- constructor, and the index of the constructor.
-symTabLookupCtor :: Text -> SymbolTable e -> Maybe (Type, Constructor, Int)
+symTabLookupCtor :: Text -> SymbolTable e -> Maybe ((Text, [Text]), Constructor, Int)
 symTabLookupCtor name t = listToMaybe . mapMaybe (find isTheCtor) $ getCtors
   where
-    getCtors = (\(ty, cs) -> zip3 (repeat ty) cs [0..]) <$> Map.elems (symTabAdts t)
+    getCtors = (\(tname, (tvars, cs)) -> zip3 (repeat (tname, tvars)) cs [0..]) <$> Map.toList (symTabAdts t)
     isTheCtor (_, Ctor ctorName _, _) = ctorName == name
 
-symTabLookupAdt :: Text -> SymbolTable e -> Maybe (Type, [Constructor])
+symTabLookupAdt :: Text -> SymbolTable e -> Maybe ([Text], [Constructor])
 symTabLookupAdt name = Map.lookup name . symTabAdts
 
 symTabLookupVar :: Text -> SymbolTable e -> Maybe Type
@@ -91,3 +91,8 @@ symTabLookupStaticFun name = Map.lookup name . symTabFuns
 
 symTabLookupExternFun :: Text -> SymbolTable e -> Maybe ([(Text, Type)], Type)
 symTabLookupExternFun name = Map.lookup name . symTabExtern
+
+symTabLookupFun :: Text -> SymbolTable e -> Maybe (Set Text, [(Text, Type)], Type)
+symTabLookupFun name tab = static tab <|> extern tab
+  where static = fmap (\(tvars, p, r, _) -> (tvars, p, r)) . symTabLookupStaticFun name
+        extern = fmap (\(p, r) -> (Set.empty, p, r)) . symTabLookupExternFun name
