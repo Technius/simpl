@@ -132,9 +132,10 @@ lookupTypeTag ty =
     Just oper -> pure oper
     Nothing -> do
       let name = case ty of
-            TyNumber _ -> "Int" -- TODO: fix this
-            TyString -> "String"
+            TyNumber NumInt -> "Int"
+            TyNumber NumDouble -> "Double"
             TyBool -> "Bool"
+            TyString -> "String"
             TyAdt n _ -> "data." <> n
             x -> error ("TODO: handle tag type lookup for " ++ show x)
       let llvmTy = typeToLLVM (Fix ty)
@@ -571,8 +572,8 @@ moduleCodegen srcCode symTab = mdo
   -- Insert function operands into symbol table before emitting so order of
   -- definition doesn't matter. This works because the codegen monad is lazy.
   modify (\t -> t { tableFuns = tableFuns t `Map.union` Map.fromList funOpers })
-  -- TODO: Care about type variables
   funOpers <- forM (Map.toList . symTabFuns $ symTab) $ \(name, (_, params, ty, body)) ->
+    -- Ignore type variables since they're handled with boxing code
     (name, ) <$> funToLLVM name params ty body
 
   _ <- LLVMIR.function "main" [] LLVM.i64 $ \_ -> do
