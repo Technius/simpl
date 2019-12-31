@@ -69,7 +69,7 @@ fun add_Int (x : Int, y : Int) : Int := {
   x + y
 }
 
-fun addTable_Int : AddTable Int := {
-  let f = &add_Int in
-  Add f
-}
+# fun addTable_Int : AddTable Int := {
+#   let f = &add_Int in
+#   Add f
+# }

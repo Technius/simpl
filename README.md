@@ -6,7 +6,8 @@
 functional programming. It comes with a compiler that uses LLVM to generate
 native machine code.
 
-See [this sample file](sample.spl) for an example of the syntax.
+See [this sample file](sample.spl) for a brief demonstration example of the
+syntax. For more comprehensive examples, check out the [test suite](test-suite).
 
 Current language features:
 
@@ -16,13 +17,16 @@ Current language features:
 * Functions and function application
 * Function references (to static functions only right now)
 * Static types with type inference
+* Rank 1 parametric polymorphism
 
 ## Compiling
 
 LLVM 9 and clang 9 must be installed.
 
-To compile, run `stack build`. When developing, use the `--fast` flag. A
-`test.sh` script is provided to quickly test compilation.
+To compile, run `stack build`. When developing, use the `--fast` flag.
+
+The test suite programs can be compiled with `make test` and the generated
+executables can be found in `test-suite/bin`.
 
 ## Usage
 
@@ -30,6 +34,14 @@ The SimPL runtime currently uses the
 [`boehm-gc`](https://github.com/ivmai/bdwgc) garbage collector to handle heap
 allocations. When linking object files created by `simplc`, make sure that you
 link `libgc` as well.
+
+Run the compiler using
+```bash
+stack run simplc -- <source file> -o <target file>
+```
+
+To debug the compiler, use one or more of the `--dump-joinir` and `--dump-ir`
+flags.
 
 ## License
 
