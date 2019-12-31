@@ -105,7 +105,7 @@ getUType = _unAttr . V.rget @'TCType . annGetAnn
 
 type HasPos fields = V.RElem 'ExprPos fields (V.RIndex 'ExprPos fields)
 
--- | Retrieves the unification variable information stored in a typechecking [AnnExprF]
+-- | Retrieves the source position information stored in an [AnnExprF]
 getPos :: HasPos fields => AnnExprF expr fields a -> SourcePos
 getPos = _unAttr . V.rget @'ExprPos . annGetAnn
 
