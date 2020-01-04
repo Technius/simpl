@@ -184,7 +184,7 @@ typeVar = Fix . TyVar <$> identifier
 typeAdt :: Parser m Type
 typeAdt = do
   name <- typeIdentifier
-  tparams <- many (parens type' <|> type')
+  tparams <- many (parens type' <|> typeAtom)
   pure $ Fix (TyAdt name tparams)
 
 typeAtom :: Parser m Type
