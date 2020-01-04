@@ -20,6 +20,8 @@ fun head (xs : List a) : Maybe a := {
 # requiring a function ref w/ boxed argument does not work.
 # Passed function ref needs to be automatically "promoted" to a
 # boxed version.
+#
+# See manual boxing example below.
 
 # fun filter (xs : List a, f : a -> Bool) : List a := {
 #   case xs of
@@ -52,24 +54,33 @@ fun printList (xs : List a, msg : String) : Int := {
 }
 
 fun main : Int := {
-  let nums = @numberList(10) in
+  let nums = @numberList(@add(5, 5, @addTable_Int())) in
   let x1 = @printList(nums, "numberList") in
   let x2 = @printList(@filter(nums, &lte5), "filter(numberList, <= 5)") in
   x2
 }
 
-data AddTable a = { Add (a -> a -> a) }
+# Manual boxing example. Note how the function's type signature and
+# implementation must be changed to accomodate the boxing.
+
+data Box a = { MkBox a }
+data AddTable a = { Add (Box a -> Box a -> Box a) }
 
 fun add (x : a, y : a, table : AddTable a) : a := {
   case table of
-    Add f => @f(x, y)
+    Add f =>
+      case @f(MkBox x, MkBox y) of
+        MkBox res => res
 }
 
-fun add_Int (x : Int, y : Int) : Int := {
-  x + y
+fun add_Int (bx : Box Int, by : Box Int) : Box Int := {
+  case bx of
+    MkBox x =>
+      case by of
+        MkBox y =>
+	  MkBox (x + y)
 }
 
-# fun addTable_Int : AddTable Int := {
-#   let f = &add_Int in
-#   Add f
-# }
+fun addTable_Int : AddTable Int := {
+  Add &add_Int
+}
